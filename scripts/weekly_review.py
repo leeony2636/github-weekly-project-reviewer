@@ -556,7 +556,6 @@ def build_prompt(activity, repair=False):
     {{
       "text": "실제 변경으로 확인되는 진행사항",
       "evidence": ["파일명 또는 파일:줄번호"],
-      "confidence": 0.90
     }}
   ],
   "improvements": [
@@ -732,7 +731,6 @@ def validate_report(report, activity):
         item["evidence"] = _grounded_evidence(
             item.get("evidence"), activity, section
         )
-        item["confidence"] = _required_confidence(item, section)
 
     for index, item in enumerate(report["improvements"]):
         section = f"improvements[{index}]"
