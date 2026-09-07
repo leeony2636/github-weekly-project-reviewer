@@ -130,6 +130,7 @@ Fork한 저장소의 `Actions` 메뉴에서 `Weekly Project Review`를 선택합
 오른쪽의 `Run workflow` 버튼을 누르면 리뷰를 바로 실행할 수 있습니다.
 
 ![Weekly Project Review 수동 실행](docs/images/01-run-workflow.png)
+<img width="1642" height="514" alt="01-run-workflow png" src="https://github.com/user-attachments/assets/c61305ec-ee3d-4e89-9e32-c36c8e2fe8b7" />
 
 새로운 변경사항이 없어도 다시 분석하려면 다음 항목을 선택합니다.
 
@@ -155,6 +156,7 @@ schedule:
 정상적으로 완료되면 Actions 실행 화면에 초록색 성공 표시가 나타납니다.
 
 ![Weekly Project Review 실행 성공](docs/images/02-workflow-success.png)
+<img width="1896" height="621" alt="02-workflow-success" src="https://github.com/user-attachments/assets/d6c7668c-8a61-4088-833e-04bbef14c8eb" />
 
 ## 생성되는 리뷰 Issue
 
@@ -165,6 +167,7 @@ Weekly Project Review - YYYY-MM-DD
 ```
 
 ![자동 생성된 Weekly Project Review Issue](docs/images/03-generated-issue.png)
+<img width="1714" height="473" alt="03-generated-issue" src="https://github.com/user-attachments/assets/c990dcfb-3aa4-4a4a-938e-a34298952bdb" />
 
 Issue 상단에는 다음 정보가 표시됩니다.
 
@@ -179,14 +182,17 @@ Issue 상단에는 다음 정보가 표시됩니다.
 - 잘 진행된 점
 
 ![리뷰 분석 정보와 변경사항](docs/images/04-review-summary.png)
+<img width="955" height="743" alt="04-review-summary" src="https://github.com/user-attachments/assets/ec52ee87-8f06-4e0b-bfb0-b3358c06f1b7" />
 
 이어서 개선이 필요한 항목의 이유, 우선순위, 신뢰도와 근거 파일이 표시됩니다.
 
 ![개선이 필요한 점](docs/images/05-review-improvements.png)
+<img width="902" height="534" alt="05-review-improvements" src="https://github.com/user-attachments/assets/ef9ecf2e-add6-4eef-9c3e-46df0cda159d" />
 
 마지막에는 다음 추천 작업과 분석에 사용된 근거 커밋 및 Pull Request가 표시됩니다.
 
 ![다음 추천 작업과 근거](docs/images/06-review-next-tasks.png)
+<img width="904" height="826" alt="06-review-next-tasks" src="https://github.com/user-attachments/assets/ababe35f-9f06-472b-9a74-350dd11f7004" />
 
 ## AI 모델과 검증
 
