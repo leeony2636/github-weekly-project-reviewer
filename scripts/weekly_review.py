@@ -9,7 +9,6 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from json_repair import repair_json
 
 
 load_dotenv()
@@ -32,13 +31,19 @@ MAX_PULL_REQUESTS = int(os.getenv("MAX_PULL_REQUESTS", "10"))
 MAX_HF_ATTEMPTS = min(int(os.getenv("MAX_HF_ATTEMPTS", "2")), 2)
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "6500"))
 MAX_PATCH_CHARS = int(os.getenv("MAX_PATCH_CHARS", "1200"))
-MAX_FINDINGS = int(os.getenv("MAX_FINDINGS", "5"))
 MAX_REACT_STEPS = 4
+MAX_REPORT_ITEMS = min(max(int(os.getenv("MAX_REPORT_ITEMS", "5")), 1), 5)
+MIN_IMPROVEMENT_CONFIDENCE = float(
+    os.getenv("MIN_IMPROVEMENT_CONFIDENCE", "0.75")
+)
 FORCE_REVIEW = os.getenv("FORCE_REVIEW", "false").lower() == "true"
+
+if not 0.0 < MIN_IMPROVEMENT_CONFIDENCE <= 1.0:
+    raise ValueError("MIN_IMPROVEMENT_CONFIDENCE는 0보다 크고 1 이하여야 합니다.")
 
 GITHUB_API = "https://api.github.com"
 HF_API = "https://router.huggingface.co/featherless-ai/v1/chat/completions"
-HF_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+HF_MODEL = os.getenv("HF_MODEL", "Qwen/Qwen2.5-3B-Instruct").strip()
 DB_PATH = Path(os.getenv("REVIEW_DB_PATH", "review_trace.db"))
 
 github_headers = {
@@ -440,8 +445,8 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
     changed_file_names = " ".join(changed_files).lower()
     patch_text = " ".join(
         file_info.get("patch", "")
-        for source in [*commits, *pull_requests]
-        for file_info in source.get("files", [])
+        for commit in commits
+        for file_info in commit.get("files", [])
     ).lower()
     static_checks = []
 
@@ -456,14 +461,14 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
 
     if any(name.lower().endswith(".py") for name in changed_files):
         if not any("test" in name.lower() for name in changed_files):
+            changed_python_files = sorted(
+                name for name in changed_files
+                if name.lower().endswith(".py")
+            )
             static_checks.append({
                 "text": "변경된 Python 코드에 대한 테스트 추가 필요",
                 "reason": "Python 코드 변경은 있으나 대응하는 테스트 파일 변경이 확인되지 않습니다.",
-                "evidence": [
-                    name
-                    for name in sorted(changed_files)
-                    if name.lower().endswith(".py")
-                ],
+                "evidence": changed_python_files,
                 "priority": "P1",
                 "confidence": 0.80,
             })
@@ -476,15 +481,7 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
         static_checks.append({
             "text": "민감정보 하드코딩 여부 확인 필요",
             "reason": "변경 diff에서 API 키·토큰·비밀번호 형태의 문자열이 발견되었습니다.",
-            "evidence": [
-                name
-                for name in sorted(changed_files)
-                if re.search(
-                    r"(api[_-]?key|password|secret|token)",
-                    name,
-                    re.IGNORECASE,
-                )
-            ] or sorted(changed_files),
+            "evidence": sorted(changed_files),
             "priority": "P0",
             "confidence": 0.90,
         })
@@ -559,7 +556,7 @@ def build_prompt(activity, repair=False):
     {{
       "text": "실제 변경으로 확인되는 진행사항",
       "evidence": ["파일명 또는 파일:줄번호"],
-      "confidence": 0.0
+      "confidence": 0.90
     }}
   ],
   "improvements": [
@@ -568,7 +565,7 @@ def build_prompt(activity, repair=False):
       "reason": "개선이 필요한 이유",
       "evidence": ["파일명 또는 URL"],
       "priority": "P1",
-      "confidence": 0.0
+      "confidence": 0.85
     }}
   ],
   "next_tasks": [
@@ -583,13 +580,17 @@ def build_prompt(activity, repair=False):
 
 ## 규칙
 - 모든 결과는 한국어로 작성하세요.
-- improvements와 next_tasks는 각각 최대 {MAX_FINDINGS}개입니다.
+- progress, improvements, next_tasks는 각각 최대 {MAX_REPORT_ITEMS}개입니다.
 - 변경 파일 목록만 반복하지 말고 실제 patch 내용을 평가하세요.
-- improvements와 next_tasks는 의미가 겹치면 안 됩니다.
-- 같은 주제의 작업은 하나로 합치세요.
+- 완료했거나 추가했다고 설명하는 항목은 progress에만 작성하세요.
+- 아직 부족하거나 검증되지 않은 항목만 improvements에 작성하세요.
+- 각 improvement를 해결하는 실행 작업을 next_tasks에 작성하세요.
+- improvements가 하나라도 있으면 next_tasks도 하나 이상 작성하세요.
+- 같은 Docker 문서 작업은 하나로 합치세요.
 - 모든 improvement와 next_task에는 실제 근거가 있어야 합니다.
 - 근거에는 가능한 경우 파일명과 줄번호를 작성하세요.
 - confidence는 0.0 이상 1.0 이하 숫자입니다.
+- confidence가 {MIN_IMPROVEMENT_CONFIDENCE:.2f} 미만인 improvement는 작성하지 마세요.
 - priority는 P0, P1, P2 중 하나입니다.
 - P0는 보안·실행 불가, P1은 기능·테스트 문제, P2는 문서·개선 사항입니다.
 - 테스트, Dockerfile, requirements.txt, API 실행 가능성을 확인하세요.
@@ -603,74 +604,164 @@ def build_prompt(activity, repair=False):
 
 
 def extract_json(text):
-    text = text.strip()
-    fenced_match = re.search(
+    if not isinstance(text, str) or not text.strip():
+        raise HFFormatError("AI 응답이 비어 있습니다.")
+
+    candidate = text.strip()
+    fenced_match = re.fullmatch(
         r"```(?:json)?\s*(.*?)\s*```",
-        text,
+        candidate,
         re.DOTALL | re.IGNORECASE,
     )
     if fenced_match:
-        text = fenced_match.group(1).strip()
+        candidate = fenced_match.group(1).strip()
 
-    start = text.find("{")
-    if start == -1:
-        raise HFFormatError("AI 응답에서 JSON 객체를 찾지 못했습니다.")
-
-    candidate = text[start:]
-
+    # 일부 JSON만 떼어내거나 자동 보정하지 않는다. 앞뒤 설명, 잘린 JSON,
+    # trailing comma가 있으면 형식 오류로 처리하여 Issue 생성을 차단한다.
     try:
-        decoder = json.JSONDecoder()
-        parsed, _ = decoder.raw_decode(candidate)
-        return parsed
-    except json.JSONDecodeError as original_error:
-        try:
-            repaired = json.loads(repair_json(candidate))
-            print("AI JSON 형식을 로컬에서 보정했습니다.")
-            return repaired
-        except (json.JSONDecodeError, TypeError, ValueError) as repair_error:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        raise HFFormatError(f"AI 응답 JSON 파싱 실패: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise HFFormatError("AI 응답의 최상위 값이 JSON 객체가 아닙니다.")
+    return parsed
+
+
+def _is_placeholder_text(value):
+    return value.strip().lower() in {
+        "-",
+        "*",
+        "없음",
+        "해당 없음",
+        "n/a",
+        "none",
+        "null",
+    }
+
+
+def _required_text(item, key, section):
+    value = item.get(key)
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or _is_placeholder_text(value)
+    ):
+        raise HFFormatError(f"{section}.{key}가 비어 있습니다.")
+    return value.strip()
+
+
+def _required_confidence(item, section):
+    if "confidence" not in item or isinstance(item["confidence"], bool):
+        raise HFFormatError(f"{section}.confidence가 없거나 숫자가 아닙니다.")
+    try:
+        confidence = float(item["confidence"])
+    except (TypeError, ValueError) as exc:
+        raise HFFormatError(f"{section}.confidence가 숫자가 아닙니다.") from exc
+    if not 0.0 <= confidence <= 1.0:
+        raise HFFormatError(f"{section}.confidence는 0과 1 사이여야 합니다.")
+    return confidence
+
+
+def _grounded_evidence(values, activity, section):
+    if not isinstance(values, list) or not values:
+        raise HFFormatError(f"{section}.evidence가 비어 있거나 목록이 아닙니다.")
+
+    changed_files = {
+        str(name).strip().replace("\\", "/")
+        for name in activity.get("changed_files", [])
+        if str(name).strip()
+    }
+    source_urls = {
+        str(item.get("url", "")).strip()
+        for item in activity.get("commits", []) + activity.get("pull_requests", [])
+        if str(item.get("url", "")).strip()
+    }
+    source_ids = {
+        str(item.get("sha", "")).strip()
+        for item in activity.get("commits", [])
+        if str(item.get("sha", "")).strip()
+    }
+    source_ids.update(
+        f"#{item['number']}"
+        for item in activity.get("pull_requests", [])
+        if item.get("number") is not None
+    )
+
+    cleaned = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise HFFormatError(f"{section}.evidence에 빈 근거가 있습니다.")
+
+        raw = value.strip().strip("`")
+        file_candidate = re.sub(r"(?::\d+(?:-\d+)?|#L\d+)$", "", raw)
+        file_candidate = file_candidate.replace("\\", "/")
+        grounded = (
+            file_candidate in changed_files
+            or raw in source_urls
+            or raw in source_ids
+        )
+        if not grounded:
             raise HFFormatError(
-                f"AI 응답 JSON 파싱 실패: {original_error}"
-            ) from repair_error
+                f"{section}.evidence가 수집된 변경 근거와 일치하지 않습니다: {raw}"
+            )
+        if raw not in cleaned:
+            cleaned.append(raw)
+
+    return cleaned
 
 
-def validate_report(report):
+def validate_report(report, activity):
     required_keys = {"summary", "progress", "improvements", "next_tasks"}
     if not isinstance(report, dict) or not required_keys.issubset(report):
         raise HFFormatError("AI 응답에 필요한 항목이 없습니다.")
 
     if not isinstance(report["summary"], str) or not report["summary"].strip():
         raise HFFormatError("summary가 비어 있습니다.")
+    report["summary"] = report["summary"].strip()
 
     for key in ("progress", "improvements", "next_tasks"):
         if not isinstance(report[key], list):
             raise HFFormatError(f"{key}가 목록이 아닙니다.")
 
-    report["improvements"] = report["improvements"][:MAX_FINDINGS]
-    report["next_tasks"] = report["next_tasks"][:MAX_FINDINGS]
-
-    for item in report["improvements"]:
+    for index, item in enumerate(report["progress"]):
+        section = f"progress[{index}]"
         if not isinstance(item, dict):
-            raise HFFormatError("improvements 항목이 객체가 아닙니다.")
-        if not item.get("text") or not item.get("evidence"):
-            raise HFFormatError("개선점에 text 또는 evidence가 없습니다.")
-        try:
-            confidence = float(item.get("confidence", 0.0))
-        except (TypeError, ValueError) as exc:
-            raise HFFormatError("confidence가 숫자가 아닙니다.") from exc
-        if not 0.0 <= confidence <= 1.0:
-            raise HFFormatError("confidence는 0과 1 사이여야 합니다.")
-        item["confidence"] = confidence
+            raise HFFormatError(f"{section}가 객체가 아닙니다.")
+        item["text"] = _required_text(item, "text", section)
+        item["evidence"] = _grounded_evidence(
+            item.get("evidence"), activity, section
+        )
+        item["confidence"] = _required_confidence(item, section)
 
-        if item.get("priority") not in {"P0", "P1", "P2"}:
-            item["priority"] = "P2"
-
-    for item in report["next_tasks"]:
+    for index, item in enumerate(report["improvements"]):
+        section = f"improvements[{index}]"
         if not isinstance(item, dict):
-            raise HFFormatError("next_tasks 항목이 객체가 아닙니다.")
-        if not item.get("task") or not item.get("evidence"):
-            raise HFFormatError("추천 작업에 task 또는 evidence가 없습니다.")
+            raise HFFormatError(f"{section}가 객체가 아닙니다.")
+        item["text"] = _required_text(item, "text", section)
+        item["reason"] = _required_text(item, "reason", section)
+        item["evidence"] = _grounded_evidence(
+            item.get("evidence"), activity, section
+        )
+        item["confidence"] = _required_confidence(item, section)
         if item.get("priority") not in {"P0", "P1", "P2"}:
-            item["priority"] = "P2"
+            raise HFFormatError(f"{section}.priority가 P0, P1, P2가 아닙니다.")
+
+    for index, item in enumerate(report["next_tasks"]):
+        section = f"next_tasks[{index}]"
+        if not isinstance(item, dict):
+            raise HFFormatError(f"{section}가 객체가 아닙니다.")
+        item["task"] = _required_text(item, "task", section)
+        item["reason"] = _required_text(item, "reason", section)
+        item["evidence"] = _grounded_evidence(
+            item.get("evidence"), activity, section
+        )
+        if item.get("priority") not in {"P0", "P1", "P2"}:
+            raise HFFormatError(f"{section}.priority가 P0, P1, P2가 아닙니다.")
+
+    report["progress"] = report["progress"][:MAX_REPORT_ITEMS]
+    report["improvements"] = report["improvements"][:MAX_REPORT_ITEMS]
+    report["next_tasks"] = report["next_tasks"][:MAX_REPORT_ITEMS]
 
     return report
 
@@ -713,7 +804,7 @@ def call_huggingface(activity, repair=False):
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise HFFormatError("Hugging Face 응답 구조가 올바르지 않습니다.") from exc
 
-    report = validate_report(extract_json(content))
+    report = validate_report(extract_json(content), activity)
     output_chars = len(content)
     metrics = {
         "elapsed_seconds": round(elapsed_seconds, 2),
@@ -807,112 +898,269 @@ def previous_suggestion_texts(previous_reviews):
     return texts
 
 
+def as_finding(item, item_type="improvement"):
+    text_key = "task" if item_type == "task" else "text"
+    return {
+        "text": item.get(text_key, ""),
+        "reason": item.get("reason", ""),
+        "evidence": item.get("evidence", []),
+    }
+
+
+def findings_are_similar(left, right):
+    left_text = normalize_text(
+        f"{left.get('text', '')} {left.get('reason', '')}"
+    )
+    right_text = normalize_text(
+        f"{right.get('text', '')} {right.get('reason', '')}"
+    )
+
+    if not left_text or not right_text:
+        return False
+
+    if left_text == right_text:
+        return True
+
+    ratio = difflib.SequenceMatcher(
+        None,
+        left_text,
+        right_text,
+    ).ratio()
+
+    left_evidence = {
+        normalize_text(str(value))
+        for value in left.get("evidence", [])
+    }
+
+    right_evidence = {
+        normalize_text(str(value))
+        for value in right.get("evidence", [])
+    }
+
+    same_evidence = bool(left_evidence & right_evidence)
+
+    same_topic = topic_key(left_text) == topic_key(right_text)
+
+    if same_evidence and same_topic and ratio >= 0.55:
+        return True
+
+    return ratio >= 0.84
+
+
+def topic_key(text):
+    text = normalize_text(text)
+    if "docker" in text and ("readme" in text or "문서" in text):
+        return "docker_documentation"
+    if "docker" in text and ("실행" in text or "빌드" in text or "검증" in text):
+        return "docker_verification"
+    if "api" in text and ("demo" in text or "이미지" in text or "화면" in text):
+        return "api_demo"
+    if "테스트" in text:
+        return "testing"
+    if "보안" in text or "secret" in text or "민감정보" in text:
+        return "security"
+    return text
+
+
+def describes_completed_work(item):
+    text = f"{item.get('text', '')} {item.get('reason', '')}"
+    normalized = normalize_text(text)
+
+    pending_pattern = re.compile(
+        r"(필요|해야|되어야|검증되지|확인되지|근거가 없|누락|미흡|부족|"
+        r"대응하는 테스트.*없|추가되지|반영되지|구현되지)"
+    )
+    completed_pattern = re.compile(
+        r"(추가했|추가됐|추가되었|수정했|수정됐|수정되었|"
+        r"구현했|구현됐|구현되었|반영했|반영됐|반영되었|"
+        r"완료했|완료됐|완료되었|작성했|작성됐|작성되었|"
+        r"업데이트했|업데이트됐|업데이트되었|확인됩니다|"
+        r"포함되어 있습니다|제공하고 있습니다|하였습니다|했습니다)"
+    )
+
+    if pending_pattern.search(normalized):
+        return False
+    return bool(completed_pattern.search(normalized))
+
+
+def is_duplicate_previous(item, previous_texts):
+    candidate = normalize_text(item.get("text", ""))
+    if not candidate:
+        return True
+    return any(candidate in previous for previous in previous_texts)
+
+
+def duplicate_in_current(item, saved_items, item_type="improvement"):
+    current_text = item.get("task" if item_type == "task" else "text", "")
+    current_finding = as_finding(item, item_type)
+
+    for saved in saved_items:
+        saved_text = saved.get("task" if item_type == "task" else "text", "")
+        if topic_key(current_text) == topic_key(saved_text):
+            return True
+        if findings_are_similar(current_finding, as_finding(saved, item_type)):
+            return True
+    return False
+
+
+def task_matches_improvement(task, improvement):
+    task_finding = as_finding(task, "task")
+    improvement_finding = as_finding(improvement, "improvement")
+    if findings_are_similar(task_finding, improvement_finding):
+        return True
+
+    task_evidence = set(task.get("evidence", []))
+    improvement_evidence = set(improvement.get("evidence", []))
+    return (
+        topic_key(task.get("task", "")) == topic_key(improvement.get("text", ""))
+        and bool(task_evidence & improvement_evidence)
+    )
+
+
 def remove_duplicate_findings(report, previous_reviews):
     previous_texts = previous_suggestion_texts(previous_reviews)
+    duplicate_count = 0
+    filtered_count = 0
+
+    progress_items = []
+    for item in report.get("progress", []):
+        if any(findings_are_similar(item, saved) for saved in progress_items):
+            duplicate_count += 1
+            continue
+        progress_items.append(item)
+
     improvements = []
-    next_tasks = []
-    removed = 0
-    progress_items = [
-        item
-        for item in report.get("progress", [])
-        if isinstance(item, dict)
-    ]
-
-    def as_finding(item, kind):
-        if kind == "improvement":
-            return item
-        return {
-            "text": item.get("task", ""),
-            "reason": item.get("reason", ""),
-            "evidence": item.get("evidence", []),
-        }
-
-    def similar(left, right):
-        left_text = normalize_text(
-            f"{left.get('text', '')} {left.get('reason', '')}"
-        )
-        right_text = normalize_text(
-            f"{right.get('text', '')} {right.get('reason', '')}"
-        )
-
-        if not left_text or not right_text:
-            return False
-
-        ratio = difflib.SequenceMatcher(
-            None,
-            left_text,
-            right_text,
-        ).ratio()
-
-        left_evidence = {
-            normalize_text(str(value))
-            for value in left.get("evidence", [])
-        }
-        right_evidence = {
-            normalize_text(str(value))
-            for value in right.get("evidence", [])
-        }
-
-        return (
-            left_text == right_text
-            or ratio >= 0.78
-            or bool(left_evidence & right_evidence) and ratio >= 0.45
-        )
-
-    def is_duplicate_in(item, collection, kind):
-        text = item.get("text", "") if kind == "improvement" else item.get("task", "")
-        if not normalize_text(text):
-            return True
-
-        for old_item in collection:
-            if similar(
-                as_finding(item, kind),
-                as_finding(old_item, kind),
-            ):
-                return True
-
-        candidate = normalize_text(text)
-        return any(candidate in previous for previous in previous_texts)
-
     for item in report.get("improvements", []):
-        completed = any(
-            similar(
-                as_finding(item, "improvement"),
-                progress_item,
-            )
+        if item["confidence"] < MIN_IMPROVEMENT_CONFIDENCE:
+            filtered_count += 1
+            continue
+
+        if describes_completed_work(item):
+            converted = {
+                "text": item["text"],
+                "evidence": item["evidence"],
+                "confidence": item["confidence"],
+            }
+            if not any(
+                findings_are_similar(converted, saved)
+                for saved in progress_items
+            ):
+                progress_items.append(converted)
+            filtered_count += 1
+            continue
+
+        if item.get("priority") != "P0" and any(
+            findings_are_similar(item, progress_item)
             for progress_item in progress_items
-        )
-
-        if completed and item.get("priority") != "P0":
-            removed += 1
-            continue
-
-        if is_duplicate_in(item, improvements, "improvement"):
-            removed += 1
-        else:
-            item.setdefault("priority", "P2")
-            improvements.append(item)
-
-    report["improvements"] = improvements[:MAX_FINDINGS]
-
-    for item in report.get("next_tasks", []):
-        if any(
-            similar(as_finding(item, "task"), improvement)
-            for improvement in report["improvements"]
         ):
-            removed += 1
+            duplicate_count += 1
             continue
 
-        if is_duplicate_in(item, next_tasks, "task"):
-            removed += 1
+        if item.get("priority") != "P0" and is_duplicate_previous(
+            item, previous_texts
+        ):
+            duplicate_count += 1
             continue
 
-        item.setdefault("priority", "P2")
+        if duplicate_in_current(item, improvements, "improvement"):
+            duplicate_count += 1
+            continue
+
+        improvements.append(item)
+
+    priority_order = {"P0": 0, "P1": 1, "P2": 2}
+    improvements.sort(
+        key=lambda item: (
+            priority_order[item["priority"]],
+            -item["confidence"],
+        )
+    )
+    improvements = improvements[:MAX_REPORT_ITEMS]
+
+    next_tasks = []
+    for item in report.get("next_tasks", []):
+        # 추천 작업은 남아 있는 개선점 중 하나와 연결될 때만 게시한다.
+        if not any(task_matches_improvement(item, imp) for imp in improvements):
+            filtered_count += 1
+            continue
+        if duplicate_in_current(item, next_tasks, "task"):
+            duplicate_count += 1
+            continue
         next_tasks.append(item)
 
-    report["next_tasks"] = next_tasks[:MAX_FINDINGS]
-    report["_removed_duplicates"] = removed
+    # 모델이 next_tasks를 빠뜨렸거나 중복 제거로 없어져도 개선점에서
+    # 결정론적으로 작업을 만들어 improvements만 남는 상태를 방지한다.
+    for improvement in improvements:
+        if len(next_tasks) >= MAX_REPORT_ITEMS:
+            break
+        if any(task_matches_improvement(task, improvement) for task in next_tasks):
+            continue
+        next_tasks.append(
+            {
+                "task": improvement["text"],
+                "reason": improvement["reason"],
+                "evidence": list(improvement["evidence"]),
+                "priority": improvement["priority"],
+            }
+        )
+
+    report["progress"] = progress_items[:MAX_REPORT_ITEMS]
+    report["improvements"] = improvements
+    report["next_tasks"] = next_tasks[:MAX_REPORT_ITEMS] if improvements else []
+    report["_removed_duplicates"] = duplicate_count
+    report["_filtered_items"] = filtered_count
+
     return report
+
+
+def assert_publishable_report(report, activity):
+    # 모델 응답 검증 후 로직이 만든 항목까지 같은 기준으로 다시 검증한다.
+    validate_report(report, activity)
+
+    if report["improvements"] and not report["next_tasks"]:
+        raise HFFormatError(
+            "개선점은 있지만 다음 추천 작업이 없어 Issue 생성을 중단합니다."
+        )
+
+    for item in report["improvements"]:
+        if item["confidence"] < MIN_IMPROVEMENT_CONFIDENCE:
+            raise HFFormatError("낮은 신뢰도의 개선점이 최종 보고서에 남았습니다.")
+        if describes_completed_work(item):
+            raise HFFormatError("완료된 작업이 개선점에 남았습니다.")
+
+    for improvement in report["improvements"]:
+        if not any(
+            task_matches_improvement(task, improvement)
+            for task in report["next_tasks"]
+        ):
+            raise HFFormatError("개선점과 연결되지 않은 다음 작업 상태입니다.")
+
+    return report
+
+
+def verify_runtime_contract():
+    required_callables = (
+        "extract_json",
+        "validate_report",
+        "normalize_text",
+        "as_finding",
+        "topic_key",
+        "findings_are_similar",
+        "describes_completed_work",
+        "task_matches_improvement",
+        "remove_duplicate_findings",
+        "assert_publishable_report",
+        "make_issue_body",
+        "create_issue",
+    )
+    missing = [
+        name for name in required_callables
+        if not callable(globals().get(name))
+    ]
+    if missing:
+        raise RuntimeError(
+            "필수 함수가 정의되지 않아 실행을 중단합니다: " + ", ".join(missing)
+        )
 
 
 def find_existing_issue(title):
@@ -940,14 +1188,34 @@ def list_to_markdown(items, item_type):
     lines = []
     for item in items:
         if isinstance(item, str):
-            lines.append(f"- {item}")
+            if item.strip() and not _is_placeholder_text(item):
+                lines.append(f"- {item.strip()}")
             continue
 
-        text = item.get("text", "") if item_type == "improvement" else item.get("task", "")
-        line = f"- {text}"
+        if not isinstance(item, dict):
+            continue
+
+        if item_type == "improvement":
+            text = item.get("text", "")
+        elif item_type == "task":
+            text = item.get("task", "")
+        else:
+            text = item.get("text", "")
+
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or _is_placeholder_text(text)
+        ):
+            continue
+
+        line = f"- {text.strip()}"
 
         if item.get("reason"):
             line += f"\n  - 이유: {item['reason']}"
+
+        if item.get("priority"):
+            line += f"\n  - 우선순위: {item['priority']}"
 
         if item_type == "improvement" and item.get("confidence") is not None:
             line += f"\n  - 신뢰도: {float(item['confidence']):.2f}"
@@ -958,7 +1226,7 @@ def list_to_markdown(items, item_type):
 
         lines.append(line)
 
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else "- 해당 없음"
 
 
 def make_issue_body(report, activity, metrics):
@@ -990,6 +1258,7 @@ def make_issue_body(report, activity, metrics):
 - 예상 출력 토큰: 약 {metrics['estimated_output_tokens']}개
 - 처리 시간: {metrics['elapsed_seconds']:.2f}초
 - 중복 제거 건수: {report.get('_removed_duplicates', 0)}개
+- 검증 제외 건수: {report.get('_filtered_items', 0)}개
 
 ## 이번 주 변경사항
 
@@ -1044,6 +1313,7 @@ def create_issue(title, body):
 
 
 def main():
+    verify_runtime_contract()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     init_trace_db(run_id)
 
@@ -1105,6 +1375,7 @@ def main():
             )
 
         report = remove_duplicate_findings(report, previous_reviews)
+        report = assert_publishable_report(report, activity)
         record_findings(run_id, report)
 
         issue_body = make_issue_body(report, activity, metrics)
