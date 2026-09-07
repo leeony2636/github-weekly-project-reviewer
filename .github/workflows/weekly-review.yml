@@ -42,3 +42,11 @@ jobs:
           LOOKBACK_DAYS: "7"
           FORCE_REVIEW: ${{ inputs.force_review }}
         run: python scripts/weekly_review.py
+
+      - name: Upload review trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-review-trace
+          path: review_trace.db
+          if-no-files-found: ignore
