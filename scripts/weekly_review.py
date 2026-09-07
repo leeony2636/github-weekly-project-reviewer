@@ -490,7 +490,7 @@ def find_existing_issue(title):
         },
     )
 
-    for issue in response.json():
+    for issue in response:
         if issue.get("pull_request"):
             continue
 
