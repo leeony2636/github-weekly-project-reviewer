@@ -152,14 +152,14 @@ def get_recent_pull_requests(since):
 def get_previous_reviews():
     """
     이전 Weekly Project Review Issue를 가져온다.
-    과거 추천 작업을 AI에게 알려 중복 추천을 줄인다.
+    이전 리뷰의 생성 시점을 기준으로 중복 분석을 줄인다.
     """
     issues = github_request(
         "GET",
         f"/repos/{TARGET_REPO}/issues",
         params={
             "state": "all",
-            "sort": "updated",
+            "sort": "created",
             "direction": "desc",
             "per_page": 20,
         },
@@ -178,12 +178,22 @@ def get_previous_reviews():
                 "title": title,
                 "url": issue["html_url"],
                 "state": issue["state"],
+                "created_at": issue["created_at"],
                 "body": (issue.get("body") or "")[:1800],
             }
         )
 
     return previous_reviews[:5]
 
+def get_last_review_time(previous_reviews):
+    if not previous_reviews:
+        return None
+
+    created_at = previous_reviews[0]["created_at"]
+
+    return datetime.fromisoformat(
+        created_at.replace("Z", "+00:00")
+    )
 
 def build_activity(commits, pull_requests, previous_reviews, since, now):
     changed_files = set()
@@ -286,44 +296,87 @@ Markdown 코드블록과 설명 문장은 출력하지 마세요.
 """.strip()
 
     system_prompt = f"""
-당신은 GitHub 프로젝트 주간 리뷰 담당자입니다.
+당신은 GitHub 프로젝트 주간 리뷰 에이전트입니다.
 
 {repair_instruction}
 
-반드시 다음 JSON 형식만 출력하세요.
+## 작업 순서
+
+다음 순서로 내부적으로 판단하세요.
+
+1. 최근 커밋과 Pull Request를 확인합니다.
+2. 변경된 파일과 실제 근거를 연결합니다.
+3. 이전 리뷰에서 이미 제안된 내용인지 확인합니다.
+4. 이미 완료된 작업인지 확인합니다.
+5. 새롭고 근거가 있는 개선점만 제안합니다.
+
+이 과정을 ReAct 방식의 제한된 검토 흐름으로 사용하세요.
+최대 5단계까지만 판단하고, 입력에 없는 내용은 추측하지 마세요.
+
+## Few-shot 예시
+
+좋은 개선점 예시:
+
+{{
+  "text": "README에 환경변수 설정 방법을 추가하면 좋습니다.",
+  "reason": "사용자가 실행에 필요한 설정을 확인하기 어렵습니다.",
+  "evidence": ["README.md"],
+  "confidence": 0.86
+}}
+
+나쁜 개선점 예시:
+
+{{
+  "text": "전체 코드를 대대적으로 리팩터링하세요.",
+  "reason": "일반적인 권장사항입니다.",
+  "evidence": [],
+  "confidence": 0.20
+}}
+
+나쁜 예시는 근거가 없으므로 절대 작성하지 마세요.
+
+## 출력 형식
+
+반드시 아래 JSON 객체만 출력하세요.
 
 {{
   "summary": "이번 주 변경사항 요약",
   "progress": [
-    "잘 진행된 점"
+    "실제 커밋 또는 파일로 확인되는 진행사항"
   ],
   "improvements": [
     {{
-      "text": "개선점",
+      "text": "구체적인 개선점",
+      "reason": "개선이 필요한 이유",
       "evidence": [
-        "근거가 되는 파일 또는 URL"
-      ]
+        "근거가 되는 파일명 또는 URL"
+      ],
+      "confidence": 0.0
     }}
   ],
   "next_tasks": [
     {{
-      "task": "추천 작업",
+      "task": "실행 가능한 다음 작업",
       "reason": "추천 이유",
       "evidence": [
-        "근거가 되는 파일 또는 URL"
+        "근거가 되는 파일명 또는 URL"
       ]
     }}
   ]
 }}
 
-규칙:
-- 입력에 없는 내용은 추측하지 마세요.
-- 실제 커밋, PR, 파일에 근거해서만 작성하세요.
+## 작성 규칙
+
+- 결과는 반드시 한국어로 작성하세요.
 - 개선점은 최대 3개만 작성하세요.
 - 다음 작업은 최대 3개만 작성하세요.
-- 이전 리뷰에서 이미 제안된 작업은 다시 추천하지 마세요.
+- 각 개선점에는 반드시 근거를 포함하세요.
+- confidence는 0.0부터 1.0 사이의 숫자입니다.
+- 근거가 없으면 개선점을 작성하지 마세요.
+- 이전 리뷰와 같은 내용은 다시 추천하지 마세요.
 - 이미 완료된 작업은 다시 추천하지 마세요.
-- 결과는 한국어로 작성하세요.
+- 일반적인 조언보다 실제 파일과 커밋을 우선하세요.
+- 전체 사고과정은 출력하지 말고, 짧은 판단 근거만 작성하세요.
 """.strip()
 
     user_prompt = f"""
@@ -523,6 +576,16 @@ def list_to_markdown(items, item_type):
         if reason:
             line += f"\n  - 이유: {reason}"
 
+        if item_type == "improvement":
+            confidence = item.get("confidence")
+
+            if confidence is not None:
+                try:
+                    confidence_text = f"{float(confidence):.2f}"
+                    line += f"\n  - 신뢰도: {confidence_text}"
+                except (TypeError, ValueError):
+                    pass
+
         if evidence:
             line += (
                 "\n  - 근거: "
@@ -614,14 +677,21 @@ def create_issue(title, body):
 
 def main():
     now = datetime.now(timezone.utc)
-    since = now - timedelta(days=LOOKBACK_DAYS)
+    lookback_since = now - timedelta(days=LOOKBACK_DAYS)
+
+    previous_reviews = get_previous_reviews()
+    last_review_time = get_last_review_time(previous_reviews)
+
+    if last_review_time and last_review_time > lookback_since:
+        since = last_review_time
+    else:
+        since = lookback_since
 
     print(f"분석 대상: {TARGET_REPO}")
     print(f"분석 시작: {since.isoformat()}")
 
     commits = get_recent_commits(since)
     pull_requests = get_recent_pull_requests(since)
-    previous_reviews = get_previous_reviews()
 
     if not commits and not pull_requests:
         print("최근 변경사항이 없습니다.")
