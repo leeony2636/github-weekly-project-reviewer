@@ -527,6 +527,8 @@ def build_prompt(activity, repair=False):
 - 이전 리뷰에 이미 나온 추천은 반복하지 마세요.
 - 완료된 작업은 다시 추천하지 마세요.
 - 전체 사고과정은 출력하지 말고 짧은 판단 근거만 출력하세요.
+- 최근 커밋의 patch에서 이미 구현된 기능은 개선점으로 다시 추천하지 마세요.
+- 실제 실행 여부가 확인되지 않은 항목은 "문제가 있다"고 단정하지 말고 "실행 검증이 필요하다"고 표현하세요.
 """.strip()
 
     user_prompt = f"아래 GitHub 활동을 분석하세요.\n\n{activity_text}"
@@ -727,35 +729,97 @@ def previous_suggestion_texts(previous_reviews):
     return texts
 
 
-def is_duplicate_finding(item, previous_texts):
-    candidate = normalize_text(
-        f"{item.get('text', '')} {item.get('reason', '')}"
+def finding_text(item):
+    return normalize_text(
+        f"{item.get('text', '')} "
+        f"{item.get('reason', '')}"
     )
+
+
+def findings_are_similar(left, right):
+    left_text = finding_text(left)
+    right_text = finding_text(right)
+
+    if not left_text or not right_text:
+        return False
+
+    if left_text == right_text:
+        return True
+
+    ratio = difflib.SequenceMatcher(
+        None,
+        left_text,
+        right_text,
+    ).ratio()
+
+    left_evidence = {
+        normalize_text(value)
+        for value in left.get("evidence", [])
+    }
+
+    right_evidence = {
+        normalize_text(value)
+        for value in right.get("evidence", [])
+    }
+
+    same_evidence = bool(left_evidence & right_evidence)
+
+    if same_evidence and ratio >= 0.45:
+        return True
+
+    return ratio >= 0.78
+
+
+def is_duplicate_finding(item, previous_texts):
+    candidate = finding_text(item)
+
     if not candidate:
         return True
 
     for previous in previous_texts:
         if candidate in previous or previous in candidate:
             return True
-        ratio = difflib.SequenceMatcher(None, candidate, previous).ratio()
-        if ratio >= 0.82:
+
+        ratio = difflib.SequenceMatcher(
+            None,
+            candidate,
+            previous,
+        ).ratio()
+
+        if ratio >= 0.78:
             return True
+
     return False
 
 
 def remove_duplicate_findings(report, previous_reviews):
-    previous_texts = previous_suggestion_texts(previous_reviews)
+    previous_texts = previous_suggestion_texts(
+        previous_reviews
+    )
+
     kept = []
     removed = 0
 
     for item in report.get("improvements", []):
-        if is_duplicate_finding(item, previous_texts):
+        duplicate_of_previous = is_duplicate_finding(
+            item,
+            previous_texts,
+        )
+
+        duplicate_in_current = any(
+            findings_are_similar(item, saved)
+            for saved in kept
+        )
+
+        if duplicate_of_previous or duplicate_in_current:
             removed += 1
-        else:
-            kept.append(item)
+            continue
+
+        kept.append(item)
 
     report["improvements"] = kept[:3]
     report["_removed_duplicates"] = removed
+
     return report
 
 
