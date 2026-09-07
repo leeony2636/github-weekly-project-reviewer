@@ -478,7 +478,7 @@ def build_prompt(activity, repair=False):
 이 순서는 제한된 ReAct형 검토 흐름입니다. 최대 {MAX_REACT_STEPS}단계이며,
 입력에 없는 내용을 추측하지 마세요.
 
-## Few-shot 예시
+## Few-shot 예시uild_prompt
 좋은 결과:
 {{
   "text": "README에 실행 환경변수 설명을 추가합니다.",
@@ -529,6 +529,7 @@ def build_prompt(activity, repair=False):
 - 전체 사고과정은 출력하지 말고 짧은 판단 근거만 출력하세요.
 - 최근 커밋의 patch에서 이미 구현된 기능은 개선점으로 다시 추천하지 마세요.
 - 실제 실행 여부가 확인되지 않은 항목은 "문제가 있다"고 단정하지 말고 "실행 검증이 필요하다"고 표현하세요.
+- improvements에 이미 포함된 내용은 next_tasks에서 반복하지 마세요.
 """.strip()
 
     user_prompt = f"아래 GitHub 활동을 분석하세요.\n\n{activity_text}"
@@ -797,7 +798,7 @@ def remove_duplicate_findings(report, previous_reviews):
         previous_reviews
     )
 
-    kept = []
+    kept_improvements = []
     removed = 0
 
     for item in report.get("improvements", []):
@@ -808,16 +809,58 @@ def remove_duplicate_findings(report, previous_reviews):
 
         duplicate_in_current = any(
             findings_are_similar(item, saved)
-            for saved in kept
+            for saved in kept_improvements
         )
 
         if duplicate_of_previous or duplicate_in_current:
             removed += 1
             continue
 
-        kept.append(item)
+        kept_improvements.append(item)
 
-    report["improvements"] = kept[:3]
+    report["improvements"] = kept_improvements[:3]
+
+    kept_tasks = []
+
+    for task in report.get("next_tasks", []):
+        task_as_finding = {
+            "text": task.get("task", ""),
+            "reason": task.get("reason", ""),
+            "evidence": task.get("evidence", []),
+        }
+
+        duplicate_of_previous = is_duplicate_finding(
+            task_as_finding,
+            previous_texts,
+        )
+
+        duplicate_of_improvement = any(
+            findings_are_similar(
+                task_as_finding,
+                improvement,
+            )
+            for improvement in kept_improvements
+        )
+
+        duplicate_of_task = any(
+            findings_are_similar(
+                task_as_finding,
+                saved_task,
+            )
+            for saved_task in kept_tasks
+        )
+
+        if (
+            duplicate_of_previous
+            or duplicate_of_improvement
+            or duplicate_of_task
+        ):
+            removed += 1
+            continue
+
+        kept_tasks.append(task)
+
+    report["next_tasks"] = kept_tasks[:3]
     report["_removed_duplicates"] = removed
 
     return report
