@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -10,19 +11,29 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# GitHub Secrets
 GITHUB_TOKEN = os.environ["TARGET_GITHUB_TOKEN"].strip()
 HF_TOKEN = os.environ["HF_TOKEN"].strip()
 
+
+# 기본 설정
 TARGET_REPO = os.getenv(
     "TARGET_REPO",
     "leeony2636/docker-fastapi-sentiment-api",
 )
 
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "7"))
+MAX_COMMITS = int(os.getenv("MAX_COMMITS", "20"))
+MAX_PULL_REQUESTS = int(os.getenv("MAX_PULL_REQUESTS", "10"))
+MAX_HF_ATTEMPTS = int(os.getenv("MAX_HF_ATTEMPTS", "2"))
+MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "7000"))
 
+
+# API 설정
 GITHUB_API = "https://api.github.com"
 HF_API = "https://router.huggingface.co/featherless-ai/v1/chat/completions"
 HF_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+
 
 github_headers = {
     "Accept": "application/vnd.github+json",
@@ -34,6 +45,17 @@ hf_headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json",
 }
+
+
+class HFRequestError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
+class HFFormatError(Exception):
+    pass
 
 
 def github_request(method, path, params=None, body=None):
@@ -64,7 +86,7 @@ def get_recent_commits(since):
         f"/repos/{TARGET_REPO}/commits",
         params={
             "since": since.isoformat(),
-            "per_page": 30,
+            "per_page": MAX_COMMITS,
         },
     )
 
@@ -87,7 +109,7 @@ def get_recent_pull_requests(since):
             "state": "all",
             "sort": "updated",
             "direction": "desc",
-            "per_page": 20,
+            "per_page": MAX_PULL_REQUESTS,
         },
     )
 
@@ -116,7 +138,7 @@ def get_recent_pull_requests(since):
                 "title": pull_request["title"],
                 "state": pull_request["state"],
                 "url": pull_request["html_url"],
-                "body": (pull_request.get("body") or "")[:1000],
+                "body": (pull_request.get("body") or "")[:800],
                 "files": [
                     file_info["filename"]
                     for file_info in files
@@ -127,7 +149,43 @@ def get_recent_pull_requests(since):
     return recent_prs
 
 
-def build_activity(commits, pull_requests, since, now):
+def get_previous_reviews():
+    """
+    이전 Weekly Project Review Issue를 가져온다.
+    과거 추천 작업을 AI에게 알려 중복 추천을 줄인다.
+    """
+    issues = github_request(
+        "GET",
+        f"/repos/{TARGET_REPO}/issues",
+        params={
+            "state": "all",
+            "sort": "updated",
+            "direction": "desc",
+            "per_page": 20,
+        },
+    )
+
+    previous_reviews = []
+
+    for issue in issues:
+        title = issue.get("title", "")
+
+        if not title.startswith("Weekly Project Review -"):
+            continue
+
+        previous_reviews.append(
+            {
+                "title": title,
+                "url": issue["html_url"],
+                "state": issue["state"],
+                "body": (issue.get("body") or "")[:1800],
+            }
+        )
+
+    return previous_reviews[:5]
+
+
+def build_activity(commits, pull_requests, previous_reviews, since, now):
     changed_files = set()
 
     for pull_request in pull_requests:
@@ -142,6 +200,7 @@ def build_activity(commits, pull_requests, since, now):
         "commits": commits,
         "pull_requests": pull_requests,
         "changed_files": sorted(changed_files),
+        "previous_reviews": previous_reviews,
     }
 
 
@@ -161,51 +220,129 @@ def extract_json(text):
     end = text.rfind("}")
 
     if start == -1 or end == -1:
-        raise RuntimeError("AI 응답에서 JSON 객체를 찾지 못했습니다.")
+        raise HFFormatError(
+            "AI 응답에서 JSON 객체를 찾지 못했습니다."
+        )
 
-    return json.loads(text[start:end + 1])
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError as exc:
+        raise HFFormatError(
+            f"AI 응답 JSON 파싱 실패: {exc}"
+        ) from exc
 
 
-def request_huggingface_review(activity):
-    system_prompt = """
-당신은 GitHub 프로젝트 주간 리뷰 담당자입니다.
-
-반드시 JSON 객체만 출력하세요.
-Markdown 코드블록이나 설명 문장을 JSON 앞뒤에 붙이지 마세요.
-
-JSON 형식:
-{
-  "summary": "이번 주 변경사항 요약",
-  "progress": ["잘 진행된 점"],
-  "improvements": [
-    {
-      "text": "개선점",
-      "evidence": ["근거가 되는 파일 또는 URL"]
+def validate_report(report):
+    required_keys = {
+        "summary",
+        "progress",
+        "improvements",
+        "next_tasks",
     }
-  ],
-  "next_tasks": [
-    {
-      "task": "추천 작업",
-      "reason": "추천 이유",
-      "evidence": ["근거가 되는 파일 또는 URL"]
-    }
-  ]
-}
 
-규칙:
-- 입력에 없는 내용은 추측하지 마세요.
-- 실제 커밋, PR, 파일에 근거해서만 작성하세요.
-- 최대 3개의 개선점만 작성하세요.
-- 다음 작업은 최대 3개만 작성하세요.
-- 이미 완료된 작업을 다시 추천하지 마세요.
-- 결과는 한국어로 작성하세요.
-""".strip()
+    if not required_keys.issubset(report):
+        raise HFFormatError(
+            "AI 응답에 필요한 항목이 모두 없습니다."
+        )
 
-    user_prompt = json.dumps(
+    if not isinstance(report["summary"], str):
+        raise HFFormatError("summary가 문자열이 아닙니다.")
+
+    if not isinstance(report["progress"], list):
+        raise HFFormatError("progress가 목록이 아닙니다.")
+
+    if not isinstance(report["improvements"], list):
+        raise HFFormatError("improvements가 목록이 아닙니다.")
+
+    if not isinstance(report["next_tasks"], list):
+        raise HFFormatError("next_tasks가 목록이 아닙니다.")
+
+    if len(report["improvements"]) > 3:
+        report["improvements"] = report["improvements"][:3]
+
+    if len(report["next_tasks"]) > 3:
+        report["next_tasks"] = report["next_tasks"][:3]
+
+    return report
+
+
+def build_prompt(activity, repair=False):
+    activity_text = json.dumps(
         activity,
         ensure_ascii=False,
         indent=2,
     )
+
+    if len(activity_text) > MAX_INPUT_CHARS:
+        activity_text = activity_text[:MAX_INPUT_CHARS]
+
+    repair_instruction = ""
+
+    if repair:
+        repair_instruction = """
+이전 응답이 JSON 형식 검증에 실패했습니다.
+이번에는 반드시 올바른 JSON 객체만 출력하세요.
+Markdown 코드블록과 설명 문장은 출력하지 마세요.
+""".strip()
+
+    system_prompt = f"""
+당신은 GitHub 프로젝트 주간 리뷰 담당자입니다.
+
+{repair_instruction}
+
+반드시 다음 JSON 형식만 출력하세요.
+
+{{
+  "summary": "이번 주 변경사항 요약",
+  "progress": [
+    "잘 진행된 점"
+  ],
+  "improvements": [
+    {{
+      "text": "개선점",
+      "evidence": [
+        "근거가 되는 파일 또는 URL"
+      ]
+    }}
+  ],
+  "next_tasks": [
+    {{
+      "task": "추천 작업",
+      "reason": "추천 이유",
+      "evidence": [
+        "근거가 되는 파일 또는 URL"
+      ]
+    }}
+  ]
+}}
+
+규칙:
+- 입력에 없는 내용은 추측하지 마세요.
+- 실제 커밋, PR, 파일에 근거해서만 작성하세요.
+- 개선점은 최대 3개만 작성하세요.
+- 다음 작업은 최대 3개만 작성하세요.
+- 이전 리뷰에서 이미 제안된 작업은 다시 추천하지 마세요.
+- 이미 완료된 작업은 다시 추천하지 마세요.
+- 결과는 한국어로 작성하세요.
+""".strip()
+
+    user_prompt = f"""
+아래 GitHub 활동을 분석하세요.
+
+{activity_text}
+""".strip()
+
+    return system_prompt, user_prompt
+
+
+def call_huggingface(activity, repair=False):
+    system_prompt, user_prompt = build_prompt(
+        activity,
+        repair=repair,
+    )
+
+    input_chars = len(system_prompt) + len(user_prompt)
+    started_at = time.perf_counter()
 
     payload = {
         "model": HF_MODEL,
@@ -223,43 +360,124 @@ JSON 형식:
         "temperature": 0.2,
     }
 
-    response = requests.post(
-        HF_API,
-        headers=hf_headers,
-        json=payload,
-        timeout=120,
-    )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Hugging Face API 오류 {response.status_code}: "
-            f"{response.text[:1000]}"
-        )
-
-    result = response.json()
-
     try:
-        content = result["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(
-            f"Hugging Face 응답 형식 오류: {str(result)[:1000]}"
+        response = requests.post(
+            HF_API,
+            headers=hf_headers,
+            json=payload,
+            timeout=120,
+        )
+    except requests.RequestException as exc:
+        raise HFRequestError(
+            None,
+            f"네트워크 오류: {exc}",
         ) from exc
 
-    report = extract_json(content)
+    elapsed_seconds = time.perf_counter() - started_at
 
-    required_keys = {
-        "summary",
-        "progress",
-        "improvements",
-        "next_tasks",
-    }
-
-    if not required_keys.issubset(report):
-        raise RuntimeError(
-            "AI 응답에 필요한 항목이 모두 포함되지 않았습니다."
+    if response.status_code != 200:
+        raise HFRequestError(
+            response.status_code,
+            response.text[:1000],
         )
 
-    return report
+    try:
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise HFFormatError(
+            f"Hugging Face 응답 형식 오류: {response.text[:1000]}"
+        ) from exc
+
+    report = validate_report(
+        extract_json(content)
+    )
+
+    output_chars = len(content)
+
+    metrics = {
+        "elapsed_seconds": round(elapsed_seconds, 2),
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "estimated_input_tokens": max(1, input_chars // 4),
+        "estimated_output_tokens": max(1, output_chars // 4),
+    }
+
+    return report, metrics
+
+
+def request_review_with_retry(activity):
+    """
+    최대 2회까지만 호출한다.
+
+    - 정상 응답: 1회
+    - JSON 형식 오류: 1회 보정
+    - 429, 5xx, 네트워크 오류: 1회 재시도
+    - 400, 401, 403: 재시도하지 않음
+    """
+    attempts = 0
+    total_metrics = {
+        "attempts": 0,
+        "elapsed_seconds": 0,
+        "estimated_input_tokens": 0,
+        "estimated_output_tokens": 0,
+    }
+
+    repair = False
+
+    while attempts < MAX_HF_ATTEMPTS:
+        attempts += 1
+        total_metrics["attempts"] = attempts
+
+        try:
+            report, metrics = call_huggingface(
+                activity,
+                repair=repair,
+            )
+
+            total_metrics["elapsed_seconds"] += metrics[
+                "elapsed_seconds"
+            ]
+            total_metrics["estimated_input_tokens"] += metrics[
+                "estimated_input_tokens"
+            ]
+            total_metrics["estimated_output_tokens"] += metrics[
+                "estimated_output_tokens"
+            ]
+
+            return report, total_metrics
+
+        except HFFormatError as exc:
+            if attempts >= MAX_HF_ATTEMPTS:
+                raise RuntimeError(
+                    f"AI 형식 오류가 반복되었습니다: {exc}"
+                ) from exc
+
+            print("AI JSON 형식 오류입니다. 1회 보정 요청을 시도합니다.")
+            repair = True
+
+        except HFRequestError as exc:
+            status = exc.status_code
+
+            retryable = (
+                status is None
+                or status == 429
+                or status >= 500
+            )
+
+            if not retryable or attempts >= MAX_HF_ATTEMPTS:
+                raise RuntimeError(
+                    f"Hugging Face 호출 실패 "
+                    f"status={status}: {exc.message}"
+                ) from exc
+
+            print(
+                f"일시적 오류 status={status}. "
+                "1회 재시도합니다."
+            )
+            time.sleep(2)
+
+    raise RuntimeError("AI 호출이 완료되지 않았습니다.")
 
 
 def find_existing_issue(title):
@@ -273,33 +491,47 @@ def find_existing_issue(title):
     )
 
     return any(
-        issue["title"] == title
+        issue.get("title") == title
         for issue in issues
     )
 
 
-def make_issue_body(report, activity):
-    def make_list(items, key):
-        if not items:
-            return "- 해당 없음"
+def list_to_markdown(items, item_type):
+    if not items:
+        return "- 해당 없음"
 
-        lines = []
+    lines = []
 
-        for item in items:
-            if isinstance(item, dict):
-                text = item.get(key, "")
-                evidence = item.get("evidence", [])
-                line = f"- {text}"
+    for item in items:
+        if isinstance(item, str):
+            lines.append(f"- {item}")
+            continue
 
-                if evidence:
-                    line += "\n  - 근거: " + ", ".join(evidence)
+        if item_type == "improvement":
+            text = item.get("text", "")
+        else:
+            text = item.get("task", "")
 
-                lines.append(line)
-            else:
-                lines.append(f"- {item}")
+        reason = item.get("reason", "")
+        evidence = item.get("evidence", [])
 
-        return "\n".join(lines)
+        line = f"- {text}"
 
+        if reason:
+            line += f"\n  - 이유: {reason}"
+
+        if evidence:
+            line += (
+                "\n  - 근거: "
+                + ", ".join(evidence)
+            )
+
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def make_issue_body(report, activity, metrics):
     commits = activity["commits"]
     pull_requests = activity["pull_requests"]
 
@@ -315,15 +547,19 @@ def make_issue_body(report, activity):
     ) or "- 해당 없음"
 
     return f"""
-> 이 보고서는 최근 변경사항을 바탕으로 생성한 AI 초안입니다.
+> 이 보고서는 AI가 생성한 초안입니다.
 > 실제 코드와 변경 내용을 확인한 뒤 작업을 결정해야 합니다.
-> 에이전트가 코드를 자동으로 수정하거나 Issue를 자동으로 종료하지 않습니다.
+> 에이전트가 코드를 자동으로 수정하거나 Issue를 자동 종료하지 않습니다.
 
-## 분석 대상
+## 분석 정보
 
 - Repository: `{TARGET_REPO}`
 - 분석 기간: 최근 {LOOKBACK_DAYS}일
 - AI 모델: `{HF_MODEL}`
+- AI 호출 횟수: {metrics["attempts"]}회
+- 예상 입력 토큰: 약 {metrics["estimated_input_tokens"]}개
+- 예상 출력 토큰: 약 {metrics["estimated_output_tokens"]}개
+- 처리 시간: {metrics["elapsed_seconds"]:.2f}초
 
 ## 이번 주 변경사항
 
@@ -331,15 +567,15 @@ def make_issue_body(report, activity):
 
 ## 잘 진행된 점
 
-{make_list(report["progress"], "text")}
+{list_to_markdown(report["progress"], "progress")}
 
 ## 개선이 필요한 점
 
-{make_list(report["improvements"], "text")}
+{list_to_markdown(report["improvements"], "improvement")}
 
 ## 다음 추천 작업
 
-{make_list(report["next_tasks"], "task")}
+{list_to_markdown(report["next_tasks"], "task")}
 
 ## 근거 커밋
 
@@ -378,33 +614,50 @@ def main():
     since = now - timedelta(days=LOOKBACK_DAYS)
 
     print(f"분석 대상: {TARGET_REPO}")
-    print(f"분석 기간: {since.isoformat()} 이후")
+    print(f"분석 시작: {since.isoformat()}")
 
     commits = get_recent_commits(since)
     pull_requests = get_recent_pull_requests(since)
+    previous_reviews = get_previous_reviews()
 
     if not commits and not pull_requests:
-        print("최근 변경사항이 없어 AI 호출과 Issue 생성을 건너뜁니다.")
+        print("최근 변경사항이 없습니다.")
+        print("AI 호출과 Issue 생성을 건너뜁니다.")
         return
 
     issue_date = now.strftime("%Y-%m-%d")
     issue_title = f"Weekly Project Review - {issue_date}"
 
     if find_existing_issue(issue_title):
-        print("같은 날짜의 Issue가 이미 있어 중복 생성을 건너뜁니다.")
+        print("같은 날짜의 Issue가 이미 있습니다.")
+        print("중복 생성을 건너뜁니다.")
         return
 
     activity = build_activity(
         commits=commits,
         pull_requests=pull_requests,
+        previous_reviews=previous_reviews,
         since=since,
         now=now,
     )
 
-    report = request_huggingface_review(activity)
-    issue_body = make_issue_body(report, activity)
+    report, metrics = request_review_with_retry(activity)
 
-    create_issue(issue_title, issue_body)
+    print(
+        f"AI 호출 완료: {metrics['attempts']}회, "
+        f"{metrics['elapsed_seconds']:.2f}초"
+    )
+
+    issue_body = make_issue_body(
+        report,
+        activity,
+        metrics,
+    )
+
+    create_issue(
+        issue_title,
+        issue_body,
+    )
 
 
 if __name__ == "__main__":
