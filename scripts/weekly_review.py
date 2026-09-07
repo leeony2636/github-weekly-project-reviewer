@@ -219,28 +219,40 @@ def extract_json(text):
     text = text.strip()
 
     fenced_match = re.search(
-        r"```(?:json)?\s*(\{.*?\})\s*```",
+        r"```(?:json)?\s*(.*?)\s*```",
         text,
-        re.DOTALL,
+        re.DOTALL | re.IGNORECASE,
     )
 
     if fenced_match:
-        text = fenced_match.group(1)
+        text = fenced_match.group(1).strip()
 
     start = text.find("{")
-    end = text.rfind("}")
 
-    if start == -1 or end == -1:
+    if start == -1:
         raise HFFormatError(
             "AI 응답에서 JSON 객체를 찾지 못했습니다."
         )
 
+    candidate = text[start:]
+
     try:
-        return json.loads(text[start:end + 1])
-    except json.JSONDecodeError as exc:
-        raise HFFormatError(
-            f"AI 응답 JSON 파싱 실패: {exc}"
-        ) from exc
+        decoder = json.JSONDecoder()
+        parsed, _ = decoder.raw_decode(candidate)
+        return parsed
+
+    except json.JSONDecodeError as original_error:
+        try:
+            repaired_text = repair_json(candidate)
+            repaired = json.loads(repaired_text)
+            print("AI JSON 형식을 로컬에서 보정했습니다.")
+            return repaired
+
+        except (json.JSONDecodeError, TypeError, ValueError) as repair_error:
+            raise HFFormatError(
+                "AI 응답 JSON 파싱 실패: "
+                f"{original_error}"
+            ) from repair_error
 
 
 def validate_report(report):
