@@ -481,20 +481,23 @@ def request_review_with_retry(activity):
 
 
 def find_existing_issue(title):
-    issues = github_request(
+    response = github_request(
         "GET",
-        f"/repos/{TARGET_REPO}/issues",
+        f"{GITHUB_API}/repos/{TARGET_REPO}/issues",
         params={
-            "state": "all",
+            "state": "open",
             "per_page": 100,
         },
     )
 
-    return any(
-        issue.get("title") == title
-        for issue in issues
-    )
+    for issue in response.json():
+        if issue.get("pull_request"):
+            continue
 
+        if issue.get("title") == title:
+            return issue
+
+    return None
 
 def list_to_markdown(items, item_type):
     if not items:
