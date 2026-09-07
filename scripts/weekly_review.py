@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GITHUB_TOKEN = os.environ["TARGET_GITHUB_TOKEN"]
-HF_TOKEN = os.environ["HF_TOKEN"]
+GITHUB_TOKEN = os.environ["TARGET_GITHUB_TOKEN"].strip()
+HF_TOKEN = os.environ["HF_TOKEN"].strip()
 
 TARGET_REPO = os.getenv(
     "TARGET_REPO",
