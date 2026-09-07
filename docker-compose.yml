@@ -1,0 +1,66 @@
+services:
+  reviewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: "no"
+    init: true
+    read_only: true
+
+    environment:
+      PR_NUMBER: ${PR_NUMBER:-}
+      TARGET_REPO: ${TARGET_REPO:-}
+
+      HF_TOKEN: ${HF_TOKEN:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TARGET_GITHUB_TOKEN: ${TARGET_GITHUB_TOKEN:-}
+
+      QWEN_MODEL: ${QWEN_MODEL:-Qwen/Qwen2.5-Coder-3B-Instruct}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://router.huggingface.co/featherless-ai/v1}
+      GPT_MODEL: ${GPT_MODEL:-openai/gpt-oss-20b}
+      GPT_BASE_URL: ${GPT_BASE_URL:-https://api.groq.com/openai/v1}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-90}
+      MAX_FINDINGS_PER_MODEL: ${MAX_FINDINGS_PER_MODEL:-20}
+      MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-800}
+      CLOUD_INPUT_CHAR_LIMIT: ${CLOUD_INPUT_CHAR_LIMIT:-16000}
+
+      GPT_REVIEW_PERCENT: ${GPT_REVIEW_PERCENT:-20}
+      GEMINI_REVIEW_PERCENT: ${GEMINI_REVIEW_PERCENT:-10}
+      MAX_QWEN_CALLS_PER_RUN: ${MAX_QWEN_CALLS_PER_RUN:-1}
+      MAX_GPT_CALLS_PER_RUN: ${MAX_GPT_CALLS_PER_RUN:-1}
+      MAX_GEMINI_CALLS_PER_RUN: ${MAX_GEMINI_CALLS_PER_RUN:-1}
+
+      LINE_TOLERANCE: ${LINE_TOLERANCE:-1}
+      MIN_MATCH_COUNT: ${MIN_MATCH_COUNT:-2}
+      MIN_SUCCESSFUL_PROVIDERS: ${MIN_SUCCESSFUL_PROVIDERS:-2}
+
+      FREE_ONLY_MODE: ${FREE_ONLY_MODE:-true}
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      DEGRADED_MODE_ON_QUOTA: ${DEGRADED_MODE_ON_QUOTA:-true}
+
+      REVIEW_DB_PATH: /data/review_trace.db
+      REVIEW_OUTPUT_PATH: /data/review_result.json
+
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_NO_CACHE_DIR: "1"
+
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
+    cpus: 2.0
+    mem_limit: 1g
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL

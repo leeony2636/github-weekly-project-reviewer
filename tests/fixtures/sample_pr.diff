@@ -1,0 +1,11 @@
+@@ -1,4 +1,5 @@
+ import os
+-old = True
++enabled = True
++timeout = 30
+ 
+ def run():
+@@ -10,2 +11,3 @@ def run():
+     start()
++    validate()
+     stop()
