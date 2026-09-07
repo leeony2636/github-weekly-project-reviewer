@@ -32,6 +32,7 @@ MAX_PULL_REQUESTS = int(os.getenv("MAX_PULL_REQUESTS", "10"))
 MAX_HF_ATTEMPTS = min(int(os.getenv("MAX_HF_ATTEMPTS", "2")), 2)
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "6500"))
 MAX_PATCH_CHARS = int(os.getenv("MAX_PATCH_CHARS", "1200"))
+MAX_FINDINGS = int(os.getenv("MAX_FINDINGS", "5"))
 MAX_REACT_STEPS = 4
 FORCE_REVIEW = os.getenv("FORCE_REVIEW", "false").lower() == "true"
 
@@ -439,8 +440,8 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
     changed_file_names = " ".join(changed_files).lower()
     patch_text = " ".join(
         file_info.get("patch", "")
-        for commit in commits
-        for file_info in commit.get("files", [])
+        for source in [*commits, *pull_requests]
+        for file_info in source.get("files", [])
     ).lower()
     static_checks = []
 
@@ -458,7 +459,11 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
             static_checks.append({
                 "text": "변경된 Python 코드에 대한 테스트 추가 필요",
                 "reason": "Python 코드 변경은 있으나 대응하는 테스트 파일 변경이 확인되지 않습니다.",
-                "evidence": sorted(changed_files),
+                "evidence": [
+                    name
+                    for name in sorted(changed_files)
+                    if name.lower().endswith(".py")
+                ],
                 "priority": "P1",
                 "confidence": 0.80,
             })
@@ -471,7 +476,15 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
         static_checks.append({
             "text": "민감정보 하드코딩 여부 확인 필요",
             "reason": "변경 diff에서 API 키·토큰·비밀번호 형태의 문자열이 발견되었습니다.",
-            "evidence": sorted(changed_files),
+            "evidence": [
+                name
+                for name in sorted(changed_files)
+                if re.search(
+                    r"(api[_-]?key|password|secret|token)",
+                    name,
+                    re.IGNORECASE,
+                )
+            ] or sorted(changed_files),
             "priority": "P0",
             "confidence": 0.90,
         })
@@ -570,10 +583,10 @@ def build_prompt(activity, repair=False):
 
 ## 규칙
 - 모든 결과는 한국어로 작성하세요.
-- improvements와 next_tasks는 각각 최대 5개입니다.
+- improvements와 next_tasks는 각각 최대 {MAX_FINDINGS}개입니다.
 - 변경 파일 목록만 반복하지 말고 실제 patch 내용을 평가하세요.
 - improvements와 next_tasks는 의미가 겹치면 안 됩니다.
-- 같은 Docker 문서 작업은 하나로 합치세요.
+- 같은 주제의 작업은 하나로 합치세요.
 - 모든 improvement와 next_task에는 실제 근거가 있어야 합니다.
 - 근거에는 가능한 경우 파일명과 줄번호를 작성하세요.
 - confidence는 0.0 이상 1.0 이하 숫자입니다.
@@ -632,8 +645,8 @@ def validate_report(report):
         if not isinstance(report[key], list):
             raise HFFormatError(f"{key}가 목록이 아닙니다.")
 
-    report["improvements"] = report["improvements"][:3]
-    report["next_tasks"] = report["next_tasks"][:3]
+    report["improvements"] = report["improvements"][:MAX_FINDINGS]
+    report["next_tasks"] = report["next_tasks"][:MAX_FINDINGS]
 
     for item in report["improvements"]:
         if not isinstance(item, dict):
@@ -810,202 +823,79 @@ def is_duplicate_finding(item, previous_texts):
     return False
 
 
-def findings_are_similar(left, right):
-    left_text = normalize_text(
-        f"{left.get('text', '')} {left.get('reason', '')}"
-    )
-    right_text = normalize_text(
-        f"{right.get('text', '')} {right.get('reason', '')}"
-    )
-
-    if not left_text or not right_text:
-        return False
-
-    if left_text == right_text:
-        return True
-
-    ratio = difflib.SequenceMatcher(
-        None,
-        left_text,
-        right_text,
-    ).ratio()
-
-    left_evidence = {
-        normalize_text(str(value))
-        for value in left.get("evidence", [])
-    }
-
-    right_evidence = {
-        normalize_text(str(value))
-        for value in right.get("evidence", [])
-    }
-
-    same_evidence = bool(left_evidence & right_evidence)
-
-    if same_evidence and ratio >= 0.45:
-        return True
-
-    return ratio >= 0.78
-
 def remove_duplicate_findings(report, previous_reviews):
     previous_texts = previous_suggestion_texts(previous_reviews)
+    improvements = []
+    next_tasks = []
     removed = 0
-
     progress_items = [
         item
         for item in report.get("progress", [])
         if isinstance(item, dict)
     ]
 
-    def to_finding(item, item_type):
-        if item_type == "improvement":
-            return {
-                "text": item.get("text", ""),
-                "reason": item.get("reason", ""),
-                "evidence": item.get("evidence", []),
-            }
-
+    def as_finding(item, kind):
+        if kind == "improvement":
+            return item
         return {
             "text": item.get("task", ""),
             "reason": item.get("reason", ""),
             "evidence": item.get("evidence", []),
         }
 
-    def similar(left, right):
-        left_text = normalize_text(
-            f"{left.get('text', '')} {left.get('reason', '')}"
-        )
-        right_text = normalize_text(
-            f"{right.get('text', '')} {right.get('reason', '')}"
-        )
-
-        if not left_text or not right_text:
-            return False
-
-        if left_text == right_text:
+    def is_duplicate_in(item, collection, kind):
+        text = item.get("text", "") if kind == "improvement" else item.get("task", "")
+        if not normalize_text(text):
             return True
 
-        ratio = difflib.SequenceMatcher(
-            None,
-            left_text,
-            right_text,
-        ).ratio()
-
-        left_evidence = {
-            normalize_text(str(value))
-            for value in left.get("evidence", [])
-        }
-
-        right_evidence = {
-            normalize_text(str(value))
-            for value in right.get("evidence", [])
-        }
-
-        if left_evidence & right_evidence and ratio >= 0.45:
-            return True
-
-        return ratio >= 0.78
-
-    def topic_key(text):
-        text = normalize_text(text)
-
-        if "docker" in text and (
-            "readme" in text or "실행" in text
-        ):
-            return "docker_documentation"
-
-        if "api" in text and (
-            "demo" in text or "이미지" in text
-        ):
-            return "api_demo"
-
-        if "테스트" in text:
-            return "testing"
-
-        if "보안" in text or "secret" in text:
-            return "security"
-
-        return text
-
-    def text_of(item, item_type):
-        if item_type == "improvement":
-            return item.get("text", "")
-        return item.get("task", "")
-
-    def duplicate_in(item, saved_items, item_type):
-        current_text = text_of(item, item_type)
-
-        if not normalize_text(current_text):
-            return True
-
-        for saved in saved_items:
-            saved_text = text_of(saved, item_type)
-
-            if topic_key(current_text) == topic_key(saved_text):
-                return True
-
-            if similar(
-                to_finding(item, item_type),
-                to_finding(saved, item_type),
+        for old_item in collection:
+            if findings_are_similar(
+                as_finding(item, kind),
+                as_finding(old_item, kind),
             ):
                 return True
 
-        normalized = normalize_text(current_text)
-
-        return any(
-            normalized in previous
-            for previous in previous_texts
-        )
-
-    improvements = []
+        candidate = normalize_text(text)
+        return any(candidate in previous for previous in previous_texts)
 
     for item in report.get("improvements", []):
-        duplicated_by_progress = any(
-            similar(
-                to_finding(item, "improvement"),
+        completed = any(
+            findings_are_similar(
+                as_finding(item, "improvement"),
                 progress_item,
             )
             for progress_item in progress_items
         )
 
-        if duplicated_by_progress and item.get("priority") != "P0":
+        if completed and item.get("priority") != "P0":
             removed += 1
             continue
 
-        if duplicate_in(item, improvements, "improvement"):
+        if is_duplicate_in(item, improvements, "improvement"):
             removed += 1
-            continue
+        else:
+            item.setdefault("priority", "P2")
+            improvements.append(item)
 
-        item.setdefault("priority", "P2")
-        improvements.append(item)
-
-    report["improvements"] = improvements[:5]
-
-    next_tasks = []
+    report["improvements"] = improvements[:MAX_FINDINGS]
 
     for item in report.get("next_tasks", []):
-        duplicated_by_improvement = any(
-            similar(
-                to_finding(item, "task"),
-                to_finding(improvement, "improvement"),
-            )
+        if any(
+            findings_are_similar(as_finding(item, "task"), improvement)
             for improvement in report["improvements"]
-        )
-
-        if duplicated_by_improvement:
+        ):
             removed += 1
             continue
 
-        if duplicate_in(item, next_tasks, "task"):
+        if is_duplicate_in(item, next_tasks, "task"):
             removed += 1
             continue
 
         item.setdefault("priority", "P2")
         next_tasks.append(item)
 
-    report["next_tasks"] = next_tasks[:5]
+    report["next_tasks"] = next_tasks[:MAX_FINDINGS]
     report["_removed_duplicates"] = removed
-
     return report
 
 
@@ -1037,20 +927,11 @@ def list_to_markdown(items, item_type):
             lines.append(f"- {item}")
             continue
 
-        if item_type == "improvement":
-            text = item.get("text", "")
-        elif item_type == "task":
-            text = item.get("task", "")
-        else:
-            text = item.get("text", "")
-
+        text = item.get("text", "") if item_type == "improvement" else item.get("task", "")
         line = f"- {text}"
 
         if item.get("reason"):
             line += f"\n  - 이유: {item['reason']}"
-
-        if item.get("priority"):
-            line += f"\n  - 우선순위: {item['priority']}"
 
         if item_type == "improvement" and item.get("confidence") is not None:
             line += f"\n  - 신뢰도: {float(item['confidence']):.2f}"
