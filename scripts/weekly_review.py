@@ -436,6 +436,46 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
     # repeated action is allowed, and the loop never exceeds MAX_REACT_STEPS.
     evidence_steps = evidence_steps[:MAX_REACT_STEPS]
 
+    changed_file_names = " ".join(changed_files).lower()
+    patch_text = " ".join(
+        file_info.get("patch", "")
+        for commit in commits
+        for file_info in commit.get("files", [])
+    ).lower()
+    static_checks = []
+
+    if "dockerfile" in changed_file_names:
+        static_checks.append({
+            "text": "Docker 빌드 및 실행 검증 필요",
+            "reason": "Dockerfile 변경은 확인되지만 실제 빌드·실행 결과가 근거에 없습니다.",
+            "evidence": [name for name in sorted(changed_files) if "dockerfile" in name.lower()],
+            "priority": "P1",
+            "confidence": 0.75,
+        })
+
+    if any(name.lower().endswith(".py") for name in changed_files):
+        if not any("test" in name.lower() for name in changed_files):
+            static_checks.append({
+                "text": "변경된 Python 코드에 대한 테스트 추가 필요",
+                "reason": "Python 코드 변경은 있으나 대응하는 테스트 파일 변경이 확인되지 않습니다.",
+                "evidence": sorted(changed_files),
+                "priority": "P1",
+                "confidence": 0.80,
+            })
+
+    if re.search(
+        r"(api[_-]?key|password|secret|token)\s*[:=]\s*['\"][^'\"]+['\"]",
+        patch_text,
+        re.IGNORECASE,
+    ):
+        static_checks.append({
+            "text": "민감정보 하드코딩 여부 확인 필요",
+            "reason": "변경 diff에서 API 키·토큰·비밀번호 형태의 문자열이 발견되었습니다.",
+            "evidence": sorted(changed_files),
+            "priority": "P0",
+            "confidence": 0.90,
+        })
+
     return {
         "repository": TARGET_REPO,
         "period": {"from": since.isoformat(), "to": now.isoformat()},
@@ -444,6 +484,7 @@ def build_activity(commits, pull_requests, previous_reviews, since, now):
         "changed_files": sorted(changed_files),
         "previous_reviews": previous_reviews,
         "evidence_steps": evidence_steps,
+        "static_checks": static_checks,
     }
 
 
@@ -478,7 +519,7 @@ def build_prompt(activity, repair=False):
 이 순서는 제한된 ReAct형 검토 흐름입니다. 최대 {MAX_REACT_STEPS}단계이며,
 입력에 없는 내용을 추측하지 마세요.
 
-## Few-shot 예시uild_prompt
+## Few-shot 예시
 좋은 결과:
 {{
   "text": "README에 실행 환경변수 설명을 추가합니다.",
@@ -501,12 +542,19 @@ def build_prompt(activity, repair=False):
 반드시 아래 JSON 객체 하나만 출력하세요.
 {{
   "summary": "변경사항 요약",
-  "progress": ["실제 변경으로 확인되는 진행사항"],
+  "progress": [
+    {{
+      "text": "실제 변경으로 확인되는 진행사항",
+      "evidence": ["파일명 또는 파일:줄번호"],
+      "confidence": 0.0
+    }}
+  ],
   "improvements": [
     {{
       "text": "구체적인 개선점",
       "reason": "개선이 필요한 이유",
       "evidence": ["파일명 또는 URL"],
+      "priority": "P1",
       "confidence": 0.0
     }}
   ],
@@ -514,22 +562,27 @@ def build_prompt(activity, repair=False):
     {{
       "task": "실행 가능한 다음 작업",
       "reason": "추천 이유",
-      "evidence": ["파일명 또는 URL"]
+      "evidence": ["파일명 또는 URL"],
+      "priority": "P1"
     }}
   ]
 }}
 
 ## 규칙
 - 모든 결과는 한국어로 작성하세요.
-- improvements와 next_tasks는 각각 최대 3개입니다.
-- 모든 improvement에는 실제 근거가 있어야 합니다.
+- improvements와 next_tasks는 각각 최대 5개입니다.
+- 변경 파일 목록만 반복하지 말고 실제 patch 내용을 평가하세요.
+- improvements와 next_tasks는 의미가 겹치면 안 됩니다.
+- 같은 Docker 문서 작업은 하나로 합치세요.
+- 모든 improvement와 next_task에는 실제 근거가 있어야 합니다.
+- 근거에는 가능한 경우 파일명과 줄번호를 작성하세요.
 - confidence는 0.0 이상 1.0 이하 숫자입니다.
-- 이전 리뷰에 이미 나온 추천은 반복하지 마세요.
-- 완료된 작업은 다시 추천하지 마세요.
+- priority는 P0, P1, P2 중 하나입니다.
+- P0는 보안·실행 불가, P1은 기능·테스트 문제, P2는 문서·개선 사항입니다.
+- 테스트, Dockerfile, requirements.txt, API 실행 가능성을 확인하세요.
+- 이전 리뷰에 이미 나온 추천과 완료된 작업은 반복하지 마세요.
+- 확인하지 못한 내용은 "검증 필요"라고 표시하세요.
 - 전체 사고과정은 출력하지 말고 짧은 판단 근거만 출력하세요.
-- 최근 커밋의 patch에서 이미 구현된 기능은 개선점으로 다시 추천하지 마세요.
-- 실제 실행 여부가 확인되지 않은 항목은 "문제가 있다"고 단정하지 말고 "실행 검증이 필요하다"고 표현하세요.
-- improvements에 이미 포함된 내용은 next_tasks에서 반복하지 마세요.
 """.strip()
 
     user_prompt = f"아래 GitHub 활동을 분석하세요.\n\n{activity_text}"
@@ -594,6 +647,17 @@ def validate_report(report):
         if not 0.0 <= confidence <= 1.0:
             raise HFFormatError("confidence는 0과 1 사이여야 합니다.")
         item["confidence"] = confidence
+
+        if item.get("priority") not in {"P0", "P1", "P2"}:
+            item["priority"] = "P2"
+
+    for item in report["next_tasks"]:
+        if not isinstance(item, dict):
+            raise HFFormatError("next_tasks 항목이 객체가 아닙니다.")
+        if not item.get("task") or not item.get("evidence"):
+            raise HFFormatError("추천 작업에 task 또는 evidence가 없습니다.")
+        if item.get("priority") not in {"P0", "P1", "P2"}:
+            item["priority"] = "P2"
 
     return report
 
@@ -730,139 +794,93 @@ def previous_suggestion_texts(previous_reviews):
     return texts
 
 
-def finding_text(item):
-    return normalize_text(
-        f"{item.get('text', '')} "
-        f"{item.get('reason', '')}"
-    )
-
-
-def findings_are_similar(left, right):
-    left_text = finding_text(left)
-    right_text = finding_text(right)
-
-    if not left_text or not right_text:
-        return False
-
-    if left_text == right_text:
-        return True
-
-    ratio = difflib.SequenceMatcher(
-        None,
-        left_text,
-        right_text,
-    ).ratio()
-
-    left_evidence = {
-        normalize_text(value)
-        for value in left.get("evidence", [])
-    }
-
-    right_evidence = {
-        normalize_text(value)
-        for value in right.get("evidence", [])
-    }
-
-    same_evidence = bool(left_evidence & right_evidence)
-
-    if same_evidence and ratio >= 0.45:
-        return True
-
-    return ratio >= 0.78
-
-
 def is_duplicate_finding(item, previous_texts):
-    candidate = finding_text(item)
-
+    candidate = normalize_text(
+        f"{item.get('text', '')} {item.get('reason', '')}"
+    )
     if not candidate:
         return True
 
     for previous in previous_texts:
         if candidate in previous or previous in candidate:
             return True
-
-        ratio = difflib.SequenceMatcher(
-            None,
-            candidate,
-            previous,
-        ).ratio()
-
-        if ratio >= 0.78:
+        ratio = difflib.SequenceMatcher(None, candidate, previous).ratio()
+        if ratio >= 0.82:
             return True
-
     return False
 
 
 def remove_duplicate_findings(report, previous_reviews):
-    previous_texts = previous_suggestion_texts(
-        previous_reviews
-    )
-
-    kept_improvements = []
+    previous_texts = previous_suggestion_texts(previous_reviews)
+    improvements = []
+    next_tasks = []
     removed = 0
 
-    for item in report.get("improvements", []):
-        duplicate_of_previous = is_duplicate_finding(
-            item,
-            previous_texts,
-        )
-
-        duplicate_in_current = any(
-            findings_are_similar(item, saved)
-            for saved in kept_improvements
-        )
-
-        if duplicate_of_previous or duplicate_in_current:
-            removed += 1
-            continue
-
-        kept_improvements.append(item)
-
-    report["improvements"] = kept_improvements[:3]
-
-    kept_tasks = []
-
-    for task in report.get("next_tasks", []):
-        task_as_finding = {
-            "text": task.get("task", ""),
-            "reason": task.get("reason", ""),
-            "evidence": task.get("evidence", []),
+    def as_finding(item, kind):
+        if kind == "improvement":
+            return item
+        return {
+            "text": item.get("task", ""),
+            "reason": item.get("reason", ""),
+            "evidence": item.get("evidence", []),
         }
 
-        duplicate_of_previous = is_duplicate_finding(
-            task_as_finding,
-            previous_texts,
-        )
+    def topic_key(text):
+        text = normalize_text(text)
+        if "docker" in text and ("readme" in text or "실행" in text):
+            return "docker_documentation"
+        if "api" in text and ("demo" in text or "이미지" in text):
+            return "api_demo"
+        if "테스트" in text:
+            return "testing"
+        if "보안" in text or "secret" in text or "token" in text:
+            return "security"
+        return text
 
-        duplicate_of_improvement = any(
-            findings_are_similar(
-                task_as_finding,
-                improvement,
-            )
-            for improvement in kept_improvements
-        )
+    def is_duplicate_in(item, collection, kind):
+        text = item.get("text", "") if kind == "improvement" else item.get("task", "")
+        if not normalize_text(text):
+            return True
 
-        duplicate_of_task = any(
-            findings_are_similar(
-                task_as_finding,
-                saved_task,
-            )
-            for saved_task in kept_tasks
-        )
+        for old_item in collection:
+            old_text = old_item.get("text", "") if kind == "improvement" else old_item.get("task", "")
+            if topic_key(text) == topic_key(old_text):
+                return True
+            if findings_are_similar(
+                as_finding(item, kind),
+                as_finding(old_item, kind),
+            ):
+                return True
 
-        if (
-            duplicate_of_previous
-            or duplicate_of_improvement
-            or duplicate_of_task
+        candidate = normalize_text(text)
+        return any(candidate in previous for previous in previous_texts)
+
+    for item in report.get("improvements", []):
+        if is_duplicate_in(item, improvements, "improvement"):
+            removed += 1
+        else:
+            item.setdefault("priority", "P2")
+            improvements.append(item)
+
+    report["improvements"] = improvements[:5]
+
+    for item in report.get("next_tasks", []):
+        if any(
+            findings_are_similar(as_finding(item, "task"), improvement)
+            for improvement in report["improvements"]
         ):
             removed += 1
             continue
 
-        kept_tasks.append(task)
+        if is_duplicate_in(item, next_tasks, "task"):
+            removed += 1
+            continue
 
-    report["next_tasks"] = kept_tasks[:3]
+        item.setdefault("priority", "P2")
+        next_tasks.append(item)
+
+    report["next_tasks"] = next_tasks[:5]
     report["_removed_duplicates"] = removed
-
     return report
 
 
@@ -1043,6 +1061,18 @@ def main():
         record_evidence(run_id, activity)
 
         report, metrics = request_review_with_retry(activity, run_id)
+
+        for finding in activity.get("static_checks", []):
+            report.setdefault("improvements", []).append(finding)
+            report.setdefault("next_tasks", []).append(
+                {
+                    "task": finding["text"],
+                    "reason": finding["reason"],
+                    "evidence": finding["evidence"],
+                    "priority": finding["priority"],
+                }
+            )
+
         report = remove_duplicate_findings(report, previous_reviews)
         record_findings(run_id, report)
 
