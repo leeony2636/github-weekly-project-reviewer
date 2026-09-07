@@ -127,7 +127,12 @@ Project activity:
         json=payload,
         timeout=120,
     )
-    response.raise_for_status()
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Hugging Face API 오류 "
+            f"{response.status_code}: {response.text[:1000]}"
+        )
 
     result = response.json()
 
