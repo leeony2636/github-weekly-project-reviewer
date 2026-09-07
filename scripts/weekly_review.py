@@ -810,6 +810,43 @@ def is_duplicate_finding(item, previous_texts):
     return False
 
 
+def findings_are_similar(left, right):
+    left_text = normalize_text(
+        f"{left.get('text', '')} {left.get('reason', '')}"
+    )
+    right_text = normalize_text(
+        f"{right.get('text', '')} {right.get('reason', '')}"
+    )
+
+    if not left_text or not right_text:
+        return False
+
+    if left_text == right_text:
+        return True
+
+    ratio = difflib.SequenceMatcher(
+        None,
+        left_text,
+        right_text,
+    ).ratio()
+
+    left_evidence = {
+        normalize_text(str(value))
+        for value in left.get("evidence", [])
+    }
+
+    right_evidence = {
+        normalize_text(str(value))
+        for value in right.get("evidence", [])
+    }
+
+    same_evidence = bool(left_evidence & right_evidence)
+
+    if same_evidence and ratio >= 0.45:
+        return True
+
+    return ratio >= 0.78
+
 def remove_duplicate_findings(report, previous_reviews):
     previous_texts = previous_suggestion_texts(previous_reviews)
     improvements = []
