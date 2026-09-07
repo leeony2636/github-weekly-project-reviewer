@@ -483,7 +483,7 @@ def request_review_with_retry(activity):
 def find_existing_issue(title):
     response = github_request(
         "GET",
-        f"{GITHUB_API}/repos/{TARGET_REPO}/issues",
+        f"/repos/{TARGET_REPO}/issues",
         params={
             "state": "open",
             "per_page": 100,
