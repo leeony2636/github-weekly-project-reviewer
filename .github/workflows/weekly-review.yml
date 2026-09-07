@@ -3,10 +3,8 @@ name: Weekly Project Review
 on:
   schedule:
     # 매주 일요일 오전 9시(KST)
-    # GitHub 기준 UTC 00:00
     - cron: "0 0 * * 0"
 
-  # GitHub Actions 화면에서 수동 실행 가능
   workflow_dispatch:
 
 permissions:
@@ -35,4 +33,5 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TARGET_GITHUB_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN }}
           TARGET_REPO: leeony2636/docker-fastapi-sentiment-api
+          LOOKBACK_DAYS: "7"
         run: python scripts/weekly_review.py
