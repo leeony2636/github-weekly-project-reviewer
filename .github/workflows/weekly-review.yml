@@ -6,6 +6,12 @@ on:
     - cron: "0 0 * * 0"
 
   workflow_dispatch:
+    inputs:
+      force_review:
+        description: "새 변경사항이 없어도 강제로 다시 분석합니다."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -34,4 +40,5 @@ jobs:
           TARGET_GITHUB_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN }}
           TARGET_REPO: leeony2636/docker-fastapi-sentiment-api
           LOOKBACK_DAYS: "7"
+          FORCE_REVIEW: ${{ inputs.force_review }}
         run: python scripts/weekly_review.py

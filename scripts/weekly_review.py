@@ -28,6 +28,7 @@ MAX_PULL_REQUESTS = int(os.getenv("MAX_PULL_REQUESTS", "10"))
 MAX_HF_ATTEMPTS = int(os.getenv("MAX_HF_ATTEMPTS", "2"))
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "7000"))
 
+FORCE_REVIEW = (os.getenv("FORCE_REVIEW", "false").lower() == "true")
 
 # API 설정
 GITHUB_API = "https://api.github.com"
@@ -682,10 +683,14 @@ def main():
     previous_reviews = get_previous_reviews()
     last_review_time = get_last_review_time(previous_reviews)
 
-    if last_review_time and last_review_time > lookback_since:
-        since = last_review_time
-    else:
+    if FORCE_REVIEW:
         since = lookback_since
+        print("강제 리뷰 모드입니다.")
+    else:
+        if last_review_time and last_review_time > lookback_since:
+            since = last_review_time
+        else:
+            since = lookback_since
 
     print(f"분석 대상: {TARGET_REPO}")
     print(f"분석 시작: {since.isoformat()}")
@@ -693,7 +698,7 @@ def main():
     commits = get_recent_commits(since)
     pull_requests = get_recent_pull_requests(since)
 
-    if not commits and not pull_requests:
+    if not commits and not pull_requests and not FORCE_REVIEW:
         print("최근 변경사항이 없습니다.")
         print("AI 호출과 Issue 생성을 건너뜁니다.")
         return
@@ -702,7 +707,7 @@ def main():
     issue_title = f"Weekly Project Review - {issue_date}"
 
     if find_existing_issue(issue_title):
-        print("같은 날짜의 Issue가 이미 있습니다.")
+        print("같은 날짜의 열린 Issue가 이미 있습니다.")
         print("중복 생성을 건너뜁니다.")
         return
 
