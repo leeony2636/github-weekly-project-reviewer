@@ -849,67 +849,154 @@ def findings_are_similar(left, right):
 
 def remove_duplicate_findings(report, previous_reviews):
     previous_texts = previous_suggestion_texts(previous_reviews)
-    improvements = []
-    next_tasks = []
     removed = 0
 
-    def as_finding(item, kind):
-        if kind == "improvement":
-            return item
+    progress_items = [
+        item
+        for item in report.get("progress", [])
+        if isinstance(item, dict)
+    ]
+
+    def to_finding(item, item_type):
+        if item_type == "improvement":
+            return {
+                "text": item.get("text", ""),
+                "reason": item.get("reason", ""),
+                "evidence": item.get("evidence", []),
+            }
+
         return {
             "text": item.get("task", ""),
             "reason": item.get("reason", ""),
             "evidence": item.get("evidence", []),
         }
 
-    def topic_key(text):
-        text = normalize_text(text)
-        if "docker" in text and ("readme" in text or "실행" in text):
-            return "docker_documentation"
-        if "api" in text and ("demo" in text or "이미지" in text):
-            return "api_demo"
-        if "테스트" in text:
-            return "testing"
-        if "보안" in text or "secret" in text or "token" in text:
-            return "security"
-        return text
+    def similar(left, right):
+        left_text = normalize_text(
+            f"{left.get('text', '')} {left.get('reason', '')}"
+        )
+        right_text = normalize_text(
+            f"{right.get('text', '')} {right.get('reason', '')}"
+        )
 
-    def is_duplicate_in(item, collection, kind):
-        text = item.get("text", "") if kind == "improvement" else item.get("task", "")
-        if not normalize_text(text):
+        if not left_text or not right_text:
+            return False
+
+        if left_text == right_text:
             return True
 
-        for old_item in collection:
-            old_text = old_item.get("text", "") if kind == "improvement" else old_item.get("task", "")
-            if topic_key(text) == topic_key(old_text):
+        ratio = difflib.SequenceMatcher(
+            None,
+            left_text,
+            right_text,
+        ).ratio()
+
+        left_evidence = {
+            normalize_text(str(value))
+            for value in left.get("evidence", [])
+        }
+
+        right_evidence = {
+            normalize_text(str(value))
+            for value in right.get("evidence", [])
+        }
+
+        if left_evidence & right_evidence and ratio >= 0.45:
+            return True
+
+        return ratio >= 0.78
+
+    def topic_key(text):
+        text = normalize_text(text)
+
+        if "docker" in text and (
+            "readme" in text or "실행" in text
+        ):
+            return "docker_documentation"
+
+        if "api" in text and (
+            "demo" in text or "이미지" in text
+        ):
+            return "api_demo"
+
+        if "테스트" in text:
+            return "testing"
+
+        if "보안" in text or "secret" in text:
+            return "security"
+
+        return text
+
+    def text_of(item, item_type):
+        if item_type == "improvement":
+            return item.get("text", "")
+        return item.get("task", "")
+
+    def duplicate_in(item, saved_items, item_type):
+        current_text = text_of(item, item_type)
+
+        if not normalize_text(current_text):
+            return True
+
+        for saved in saved_items:
+            saved_text = text_of(saved, item_type)
+
+            if topic_key(current_text) == topic_key(saved_text):
                 return True
-            if findings_are_similar(
-                as_finding(item, kind),
-                as_finding(old_item, kind),
+
+            if similar(
+                to_finding(item, item_type),
+                to_finding(saved, item_type),
             ):
                 return True
 
-        candidate = normalize_text(text)
-        return any(candidate in previous for previous in previous_texts)
+        normalized = normalize_text(current_text)
+
+        return any(
+            normalized in previous
+            for previous in previous_texts
+        )
+
+    improvements = []
 
     for item in report.get("improvements", []):
-        if is_duplicate_in(item, improvements, "improvement"):
-            removed += 1
-        else:
-            item.setdefault("priority", "P2")
-            improvements.append(item)
+        duplicated_by_progress = any(
+            similar(
+                to_finding(item, "improvement"),
+                progress_item,
+            )
+            for progress_item in progress_items
+        )
 
-    report["improvements"] = improvements[:5]
-
-    for item in report.get("next_tasks", []):
-        if any(
-            findings_are_similar(as_finding(item, "task"), improvement)
-            for improvement in report["improvements"]
-        ):
+        if duplicated_by_progress and item.get("priority") != "P0":
             removed += 1
             continue
 
-        if is_duplicate_in(item, next_tasks, "task"):
+        if duplicate_in(item, improvements, "improvement"):
+            removed += 1
+            continue
+
+        item.setdefault("priority", "P2")
+        improvements.append(item)
+
+    report["improvements"] = improvements[:5]
+
+    next_tasks = []
+
+    for item in report.get("next_tasks", []):
+        duplicated_by_improvement = any(
+            similar(
+                to_finding(item, "task"),
+                to_finding(improvement, "improvement"),
+            )
+            for improvement in report["improvements"]
+        )
+
+        if duplicated_by_improvement:
+            removed += 1
+            continue
+
+        if duplicate_in(item, next_tasks, "task"):
             removed += 1
             continue
 
@@ -918,6 +1005,7 @@ def remove_duplicate_findings(report, previous_reviews):
 
     report["next_tasks"] = next_tasks[:5]
     report["_removed_duplicates"] = removed
+
     return report
 
 
@@ -949,11 +1037,20 @@ def list_to_markdown(items, item_type):
             lines.append(f"- {item}")
             continue
 
-        text = item.get("text", "") if item_type == "improvement" else item.get("task", "")
+        if item_type == "improvement":
+            text = item.get("text", "")
+        elif item_type == "task":
+            text = item.get("task", "")
+        else:
+            text = item.get("text", "")
+
         line = f"- {text}"
 
         if item.get("reason"):
             line += f"\n  - 이유: {item['reason']}"
+
+        if item.get("priority"):
+            line += f"\n  - 우선순위: {item['priority']}"
 
         if item_type == "improvement" and item.get("confidence") is not None:
             line += f"\n  - 신뢰도: {float(item['confidence']):.2f}"
