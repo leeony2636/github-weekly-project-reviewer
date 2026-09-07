@@ -807,22 +807,6 @@ def previous_suggestion_texts(previous_reviews):
     return texts
 
 
-def is_duplicate_finding(item, previous_texts):
-    candidate = normalize_text(
-        f"{item.get('text', '')} {item.get('reason', '')}"
-    )
-    if not candidate:
-        return True
-
-    for previous in previous_texts:
-        if candidate in previous or previous in candidate:
-            return True
-        ratio = difflib.SequenceMatcher(None, candidate, previous).ratio()
-        if ratio >= 0.82:
-            return True
-    return False
-
-
 def remove_duplicate_findings(report, previous_reviews):
     previous_texts = previous_suggestion_texts(previous_reviews)
     improvements = []
@@ -843,13 +827,45 @@ def remove_duplicate_findings(report, previous_reviews):
             "evidence": item.get("evidence", []),
         }
 
+    def similar(left, right):
+        left_text = normalize_text(
+            f"{left.get('text', '')} {left.get('reason', '')}"
+        )
+        right_text = normalize_text(
+            f"{right.get('text', '')} {right.get('reason', '')}"
+        )
+
+        if not left_text or not right_text:
+            return False
+
+        ratio = difflib.SequenceMatcher(
+            None,
+            left_text,
+            right_text,
+        ).ratio()
+
+        left_evidence = {
+            normalize_text(str(value))
+            for value in left.get("evidence", [])
+        }
+        right_evidence = {
+            normalize_text(str(value))
+            for value in right.get("evidence", [])
+        }
+
+        return (
+            left_text == right_text
+            or ratio >= 0.78
+            or bool(left_evidence & right_evidence) and ratio >= 0.45
+        )
+
     def is_duplicate_in(item, collection, kind):
         text = item.get("text", "") if kind == "improvement" else item.get("task", "")
         if not normalize_text(text):
             return True
 
         for old_item in collection:
-            if findings_are_similar(
+            if similar(
                 as_finding(item, kind),
                 as_finding(old_item, kind),
             ):
@@ -860,7 +876,7 @@ def remove_duplicate_findings(report, previous_reviews):
 
     for item in report.get("improvements", []):
         completed = any(
-            findings_are_similar(
+            similar(
                 as_finding(item, "improvement"),
                 progress_item,
             )
@@ -881,7 +897,7 @@ def remove_duplicate_findings(report, previous_reviews):
 
     for item in report.get("next_tasks", []):
         if any(
-            findings_are_similar(as_finding(item, "task"), improvement)
+            similar(as_finding(item, "task"), improvement)
             for improvement in report["improvements"]
         ):
             removed += 1
