@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 *.log
+data/
+review_result.json
+review_trace.db

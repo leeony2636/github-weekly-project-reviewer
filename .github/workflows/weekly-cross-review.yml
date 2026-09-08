@@ -1,0 +1,147 @@
+name: Weekly Three-Model Review
+
+on:
+  schedule:
+    # 매주 월요일 오전 9시(한국 시간)
+    - cron: "0 0 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "검토할 최근 일수"
+        required: true
+        default: "7"
+        type: string
+
+      publish_issue:
+        description: "검토 결과를 GitHub Issue로 생성"
+        required: true
+        default: false
+        type: boolean
+
+      upload_artifacts:
+        description: "JSON 결과와 SQLite 기록 업로드"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: weekly-cross-review-${{ vars.TARGET_REPO || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  weekly-review:
+    name: Weekly three-model review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_NO_CACHE_DIR: "1"
+
+      TARGET_REPO: ${{ vars.TARGET_REPO || github.repository }}
+      TARGET_GITHUB_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN || github.token }}
+
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      QWEN_MODEL: Qwen/Qwen2.5-Coder-3B-Instruct
+      QWEN_BASE_URL: https://router.huggingface.co/featherless-ai/v1
+
+      GPT_MODEL: gpt-oss-120b
+      GPT_BASE_URL: https://api.cerebras.ai/v1
+
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
+      GEMINI_THINKING_LEVEL: low
+
+      PROVIDER_TIMEOUT_SECONDS: "90"
+      MAX_FINDINGS_PER_MODEL: "5"
+      MAX_OUTPUT_TOKENS: "800"
+
+      QWEN_INPUT_CHAR_LIMIT: "4800"
+      CLOUD_INPUT_CHAR_LIMIT: "4800"
+
+      GPT_REVIEW_PERCENT: "20"
+      GEMINI_REVIEW_PERCENT: "10"
+
+      MAX_QWEN_CALLS_PER_RUN: "1"
+      MAX_GPT_CALLS_PER_RUN: "1"
+      MAX_GEMINI_CALLS_PER_RUN: "1"
+
+      LINE_TOLERANCE: "1"
+      MIN_MATCH_COUNT: "2"
+      MIN_SUCCESSFUL_PROVIDERS: "2"
+
+      FREE_ONLY_MODE: "true"
+      CACHE_ENABLED: "true"
+      DEGRADED_MODE_ON_QUOTA: "true"
+
+      REVIEW_DB_PATH: weekly_review_trace.db
+      WEEKLY_REVIEW_OUTPUT_PATH: weekly_review_result.json
+
+      PUBLISH_ISSUE: ${{ github.event_name == 'schedule' || inputs.publish_issue }}
+      LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
+
+    steps:
+      - name: Checkout reviewer repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      - name: Run weekly three-model review
+        shell: bash
+        run: |
+          arguments=(
+            --days "${LOOKBACK_DAYS}"
+          )
+
+          if [ "${PUBLISH_ISSUE}" = "true" ]; then
+            arguments+=(--publish)
+          fi
+
+          python -m scripts.weekly_cross_review \
+            "${arguments[@]}"
+
+      - name: Show safe result summary
+        if: always()
+        run: |
+          if [ -f weekly_review_result.json ]; then
+            python -c "import json; p=json.load(open('weekly_review_result.json', encoding='utf-8')); print({'review_type': p['review_type'], 'repository': p['repository'], 'commit_count': p['commit_count'], 'pull_request_count': p['pull_request_count'], 'changed_file_count': p['changed_file_count'], 'successful_providers': p['successful_providers'], 'provider_failures': p['provider_failures'], 'consensus_count': p['consensus_count'], 'published': p['issue']['published']})"
+          else
+            echo "Weekly review result was not created."
+          fi
+
+      - name: Upload review artifacts
+        if: ${{ always() && inputs.upload_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-cross-review
+          path: |
+            weekly_review_result.json
+            weekly_review_trace.db
+          if-no-files-found: ignore
+          retention-days: 7
