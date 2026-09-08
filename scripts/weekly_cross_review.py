@@ -1019,7 +1019,7 @@ def run_weekly_review(
 
         print(
             "교차검증에 필요한 모델 수가 "
-            "부족했습니다."
+            f"부족했습니다. {exc}"
         )
         return 4
 

@@ -129,18 +129,46 @@ jobs:
         if: always()
         run: |
           if [ -f weekly_review_result.json ]; then
-            python -c "import json; p=json.load(open('weekly_review_result.json', encoding='utf-8')); print({'review_type': p['review_type'], 'repository': p['repository'], 'commit_count': p['commit_count'], 'pull_request_count': p['pull_request_count'], 'changed_file_count': p['changed_file_count'], 'successful_providers': p['successful_providers'], 'provider_failures': p['provider_failures'], 'consensus_count': p['consensus_count'], 'published': p['issue']['published']})"
+            python - <<'PY'
+          import json
+
+          with open(
+              "weekly_review_result.json",
+              encoding="utf-8",
+          ) as file:
+              payload = json.load(file)
+
+          issue = payload.get("issue", {})
+          safe_summary = {
+              "review_type": payload.get("review_type"),
+              "status": payload.get("status", "completed"),
+              "repository": payload.get("repository"),
+              "error_type": payload.get("error_type"),
+              "commit_count": payload.get("commit_count", 0),
+              "pull_request_count": payload.get(
+                  "pull_request_count",
+                  0,
+              ),
+              "changed_file_count": payload.get(
+                  "changed_file_count",
+                  0,
+              ),
+              "successful_providers": payload.get(
+                  "successful_providers",
+                  [],
+              ),
+              "provider_failures": payload.get(
+                  "provider_failures",
+                  {},
+              ),
+              "consensus_count": payload.get(
+                  "consensus_count",
+                  0,
+              ),
+              "published": issue.get("published", False),
+          }
+          print(safe_summary)
+          PY
           else
             echo "Weekly review result was not created."
           fi
-
-      - name: Upload review artifacts
-        if: ${{ always() && inputs.upload_artifacts }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: weekly-cross-review
-          path: |
-            weekly_review_result.json
-            weekly_review_trace.db
-          if-no-files-found: ignore
-          retention-days: 7
