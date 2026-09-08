@@ -230,7 +230,7 @@ class OrchestratorTests(unittest.TestCase):
         message = str(context.exception)
 
         self.assertIn(
-            "gpt(FakeRateLimitError)",
+            "gpt(FakeRateLimitError[status=429])",
             message,
         )
         self.assertIn(

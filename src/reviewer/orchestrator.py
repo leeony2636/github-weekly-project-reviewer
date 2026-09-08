@@ -46,7 +46,20 @@ def _safe_error_type(
     while current.__cause__ is not None:
         current = current.__cause__
 
-    return type(current).__name__
+    error_type = type(current).__name__
+    status_code = getattr(
+        current,
+        "status_code",
+        None,
+    )
+
+    if isinstance(status_code, int):
+        return (
+            f"{error_type}"
+            f"[status={status_code}]"
+        )
+
+    return error_type
 
 @dataclass(frozen=True, slots=True)
 class ReviewRun:
