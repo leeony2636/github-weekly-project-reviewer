@@ -126,9 +126,20 @@ class ProviderTests(unittest.TestCase):
             call_arguments["messages"][0]["role"],
             "developer",
         )
+        response_format = call_arguments[
+            "response_format"
+        ]
         self.assertEqual(
-            call_arguments["response_format"],
-            {"type": "json_object"},
+            response_format["type"],
+            "json_object",
+        )
+        self.assertEqual(
+            response_format["schema"]["required"],
+            ["findings"],
+        )
+        self.assertIn(
+            "findings",
+            response_format["schema"]["properties"],
         )
         self.assertEqual(
             call_arguments["max_tokens"],

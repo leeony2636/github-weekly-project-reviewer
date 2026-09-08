@@ -77,11 +77,77 @@ class GPTClient:
                     ],
                     temperature=0.1,
                     max_tokens=self.max_output_tokens,
-                    response_format={
+                    response_format={  # pyright: ignore[reportArgumentType]
                         "type": "json_object",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "findings": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file": {
+                                                "type": "string",
+                                            },
+                                            "line": {
+                                                "type": "integer",
+                                            },
+                                            "category": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "syntax",
+                                                    "quality",
+                                                    "bug",
+                                                    "security",
+                                                    "performance",
+                                                    "compatibility",
+                                                    "architecture",
+                                                    "test",
+                                                ],
+                                            },
+                                            "severity": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "P0",
+                                                    "P1",
+                                                    "P2",
+                                                ],
+                                            },
+                                            "message": {
+                                                "type": "string",
+                                            },
+                                            "reason": {
+                                                "type": "string",
+                                            },
+                                            "confidence": {
+                                                "type": "number",
+                                            },
+                                            "evidence": {
+                                                "type": "string",
+                                            },
+                                        },
+                                        "required": [
+                                            "file",
+                                            "line",
+                                            "category",
+                                            "severity",
+                                            "message",
+                                            "reason",
+                                            "confidence",
+                                            "evidence",
+                                        ],
+                                    },
+                                },
+                            },
+                            "required": [
+                                "findings",
+                            ],
+                        },
                     },
                 )
             )
+               
 
             content = (
                 response.choices[0].message.content
