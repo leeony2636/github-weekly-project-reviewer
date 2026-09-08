@@ -38,6 +38,15 @@ class ReviewProvider(Protocol):
 class OrchestrationError(RuntimeError):
     pass
 
+def _safe_error_type(
+    error: BaseException,
+) -> str:
+    current = error
+
+    while current.__cause__ is not None:
+        current = current.__cause__
+
+    return type(current).__name__
 
 @dataclass(frozen=True, slots=True)
 class ReviewRun:
@@ -194,7 +203,7 @@ class ReviewOrchestrator:
                         exc,
                     )
                     failures[provider_name] = (
-                        type(exc).__name__
+                        _safe_error_type(exc)
                     )
                     continue
 
@@ -256,8 +265,15 @@ class ReviewOrchestrator:
             len(successful)
             < self.min_successful_providers
         ):
-            failed_names = (
-                ", ".join(failures)
+            failure_details = (
+                ", ".join(
+                    (
+                        f"{provider}"
+                        f"({error_type})"
+                    )
+                    for provider, error_type
+                    in failures.items()
+                )
                 or "unknown"
             )
 
@@ -265,7 +281,7 @@ class ReviewOrchestrator:
                 "교차검증에 필요한 모델 수가 "
                 "부족합니다. "
                 f"성공={len(successful)}, "
-                f"실패={failed_names}"
+                f"실패={failure_details}"
             )
 
         valid_findings = (

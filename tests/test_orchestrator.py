@@ -198,27 +198,45 @@ class OrchestratorTests(unittest.TestCase):
     def test_stops_when_two_providers_fail(
         self,
     ) -> None:
+        wrapped_error = RuntimeError(
+            "provider failed"
+        )
+        wrapped_error.__cause__ = (
+            FakeRateLimitError("limited")
+        )
+
         providers = [
             FakeProvider(
                 "qwen",
-                [finding("qwen")],
+                findings=[],
             ),
             FakeProvider(
                 "gpt",
-                error=RuntimeError("failure"),
+                error=wrapped_error,
             ),
             FakeProvider(
                 "gemini",
-                error=RuntimeError("failure"),
+                error=RuntimeError("failed"),
             ),
         ]
 
         with self.assertRaises(
             OrchestrationError
-        ):
+        ) as context:
             self.run_orchestrator(
                 providers
             )
+
+        message = str(context.exception)
+
+        self.assertIn(
+            "gpt(FakeRateLimitError)",
+            message,
+        )
+        self.assertIn(
+            "gemini(RuntimeError)",
+            message,
+        )
 
     def test_filters_invalid_model_line(
         self,
