@@ -55,7 +55,7 @@ def _read_bool(
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     hf_token: str
-    cerebras_api_key: str
+    cohere_api_key: str
     gemini_api_key: str
     target_github_token: str
     target_repo: str
@@ -99,8 +99,8 @@ class RuntimeConfig:
                 "HF_TOKEN",
                 "",
             ).strip(),
-            cerebras_api_key=os.getenv(
-                "CEREBRAS_API_KEY",
+            cohere_api_key=os.getenv(
+                "COHERE_API_KEY",
                 "",
             ).strip(),
             gemini_api_key=os.getenv(
@@ -129,12 +129,17 @@ class RuntimeConfig:
             ).strip(),
             gpt_model=os.getenv(
                 "GPT_MODEL",
-                "gpt-oss-120b",
+                "command-a-plus-05-2026",
             ).strip(),
             gpt_base_url=os.getenv(
                 "GPT_BASE_URL",
-                "https://api.cerebras.ai/v1",
+                (
+                    "https://api.cohere.ai/"
+                    "compatibility/v1"
+                ),
             ).strip(),
+
+
             gemini_model=os.getenv(
                 "GEMINI_MODEL",
                 "gemini-3.8-flash",
@@ -317,9 +322,9 @@ class RuntimeConfig:
 
         if (
             self.max_gpt_calls_per_run > 0
-            and not self.cerebras_api_key
+            and not self.cohere_api_key
         ):
-            missing.append("CEREBRAS_API_KEY")
+            missing.append("COHERE_API_KEY")
 
         if (
             self.max_gemini_calls_per_run > 0

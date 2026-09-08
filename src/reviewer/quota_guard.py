@@ -40,8 +40,8 @@ class ProviderBudget:
     # 보수적으로 예약한다.
     max_output_tokens: int = 1_200
 
-    # Cerebras 무료 계정의 8,192토큰 문맥을
-    # 넘지 않도록 모든 문자를 1토큰으로 계산한다.
+    # 무료 API 할당량을 보호하기 위해 실제 모델 한도보다
+    # 보수적인 8,192토큰 상한을 적용한다.
     max_estimated_tokens_per_call: int = 8_192
 
     def __post_init__(self) -> None:

@@ -5,7 +5,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, TypeVar, cast
 
 from reviewer.config import ConfigError, RuntimeConfig
 from reviewer.github_service import (
@@ -76,17 +76,22 @@ def resolve_pull_request_number(
     return number
 
 
+_ConfigValueT = TypeVar("_ConfigValueT")
+
+
 def get_config_value(
     config: RuntimeConfig,
     name: str,
-    default: object,
-) -> object:
-    return getattr(
-        config,
-        name,
-        default,
+    default: _ConfigValueT,
+) -> _ConfigValueT:
+    return cast(
+        _ConfigValueT,
+        getattr(
+            config,
+            name,
+            default,
+        ),
     )
-
 
 def create_orchestrator(
     config: RuntimeConfig,
@@ -140,7 +145,7 @@ def create_orchestrator(
             max_findings=max_findings,
         ),
         GPTClient(
-            api_key=config.cerebras_api_key,
+            api_key=config.cohere_api_key,
             model=config.gpt_model,
             base_url=config.gpt_base_url,
             timeout_seconds=(

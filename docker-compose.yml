@@ -13,15 +13,15 @@ services:
       TARGET_REPO: ${TARGET_REPO:-}
 
       HF_TOKEN: ${HF_TOKEN:-}
-      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       TARGET_GITHUB_TOKEN: ${TARGET_GITHUB_TOKEN:-}
 
       QWEN_MODEL: ${QWEN_MODEL:-Qwen/Qwen2.5-Coder-3B-Instruct}
       QWEN_BASE_URL: ${QWEN_BASE_URL:-https://router.huggingface.co/featherless-ai/v1}
 
-      GPT_MODEL: ${GPT_MODEL:-gpt-oss-120b}
-      GPT_BASE_URL: ${GPT_BASE_URL:-https://api.cerebras.ai/v1}
+      GPT_MODEL: ${GPT_MODEL:-command-a-plus-05-2026}
+      GPT_BASE_URL: ${GPT_BASE_URL:-https://api.cohere.ai/compatibility/v1}
 
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       GEMINI_THINKING_LEVEL: ${GEMINI_THINKING_LEVEL:-low}

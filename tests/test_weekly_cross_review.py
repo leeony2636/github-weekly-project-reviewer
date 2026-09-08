@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
-
+from typing import cast
+from reviewer.config import RuntimeConfig
 from reviewer.github_service import PullRequestFile
 from reviewer.orchestrator import (
     OrchestrationError,
@@ -181,24 +182,27 @@ class FakeWeeklyService:
 def make_config(
     *,
     cache_enabled: bool,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        target_github_token="test-github-token",
-        target_repo="owner/repository",
-        hf_token="test-hf-token",
-        cerebras_api_key="test-cerebras-key",
-        gemini_api_key="test-gemini-key",
-        qwen_model="qwen-model",
-        gpt_model="gpt-model",
-        gemini_model="gemini-model",
-        gpt_review_percent=20,
-        gemini_review_percent=10,
-        qwen_input_char_limit=4_800,
-        cloud_input_char_limit=4_800,
-        line_tolerance=1,
-        min_match_count=2,
-        cache_enabled=cache_enabled,
-        degraded_mode_on_quota=True,
+) -> RuntimeConfig:
+    return cast(
+        RuntimeConfig,
+        SimpleNamespace(
+            target_github_token="test-github-token",
+            target_repo="owner/repository",
+            hf_token="test-hf-token",
+            cohere_api_key="test-cohere-key",
+            gemini_api_key="test-gemini-key",
+            qwen_model="qwen-model",
+            gpt_model="gpt-model",
+            gemini_model="gemini-model",
+            gpt_review_percent=20,
+            gemini_review_percent=10,
+            qwen_input_char_limit=4_800,
+            cloud_input_char_limit=4_800,
+            line_tolerance=1,
+            min_match_count=2,
+            cache_enabled=cache_enabled,
+            degraded_mode_on_quota=True,
+        ),
     )
 
 
@@ -338,19 +342,16 @@ class WeeklyCrossReviewTests(unittest.TestCase):
             payload["review_type"],
             "weekly",
         )
-        self.assertFalse(
-            payload["issue"]["published"]
-        )
+        issue = payload["issue"]
+        self.assertIsInstance(issue, dict)
+        assert isinstance(issue, dict)
+        self.assertFalse(issue["published"])
 
     def test_weekly_cache_key_is_stable(
         self,
     ) -> None:
-        config = SimpleNamespace(
-            qwen_model="qwen-model",
-            gpt_model="gpt-model",
-            gemini_model="gemini-model",
-            line_tolerance=1,
-            min_match_count=2,
+        config = make_config(
+            cache_enabled=True,
         )
         selection = ReviewSelection(
             provider_prompts={
@@ -439,9 +440,11 @@ class WeeklyCrossReviewTests(unittest.TestCase):
             payload["status"],
             "failed",
         )
-        self.assertFalse(
-            payload["issue"]["published"]
-        )
+        issue = payload["issue"]
+        self.assertIsInstance(issue, dict)
+        assert isinstance(issue, dict)
+        self.assertFalse(issue["published"])
+
     def test_cached_result_skips_model_call(
         self,
     ) -> None:

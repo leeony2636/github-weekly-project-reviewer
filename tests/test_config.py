@@ -16,11 +16,11 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             config.gpt_model,
-            "gpt-oss-120b",
+            "command-a-plus-05-2026",
         )
         self.assertEqual(
             config.gpt_base_url,
-            "https://api.cerebras.ai/v1",
+            "https://api.cohere.ai/compatibility/v1",
         )
         self.assertEqual(
             config.gemini_model,
@@ -137,7 +137,7 @@ class ConfigTests(unittest.TestCase):
         message = str(context.exception)
 
         self.assertIn(
-            "CEREBRAS_API_KEY",
+            "COHERE_API_KEY",
             message,
         )
         self.assertIn(
@@ -151,8 +151,8 @@ class ConfigTests(unittest.TestCase):
             os.environ,
             {
                 "HF_TOKEN": "hidden-hf",
-                "CEREBRAS_API_KEY": (
-                    "hidden-cerebras"
+                "COHERE_API_KEY": (
+                    "hidden-cohere"
                 ),
                 "GEMINI_API_KEY": (
                     "hidden-gemini"
@@ -174,7 +174,7 @@ class ConfigTests(unittest.TestCase):
             summary_text,
         )
         self.assertNotIn(
-            "hidden-cerebras",
+            "hidden-cohere",
             summary_text,
         )
         self.assertNotIn(

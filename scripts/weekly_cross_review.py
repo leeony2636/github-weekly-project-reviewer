@@ -474,8 +474,8 @@ def _require_model_secrets(
     if not config.hf_token:
         missing.append("HF_TOKEN")
 
-    if not config.cerebras_api_key:
-        missing.append("CEREBRAS_API_KEY")
+    if not config.cohere_api_key:
+        missing.append("COHERE_API_KEY")
 
     if not config.gemini_api_key:
         missing.append("GEMINI_API_KEY")

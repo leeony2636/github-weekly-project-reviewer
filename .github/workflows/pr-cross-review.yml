@@ -37,16 +37,16 @@ jobs:
       TARGET_GITHUB_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN || github.token }}
 
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-      QWEN_MODEL: ${{ vars.QWEN_MODEL || 'Qwen/Qwen2.5-Coder-3B-Instruct' }}
+      QWEN_MODEL: Qwen/Qwen2.5-Coder-3B-Instruct
       QWEN_BASE_URL: https://router.huggingface.co/featherless-ai/v1
 
-      GPT_MODEL: ${{ vars.GPT_MODEL || 'gpt-oss-120b' }}
-      GPT_BASE_URL: https://api.cerebras.ai/v1
+      GPT_MODEL: command-a-plus-05-2026
+      GPT_BASE_URL: https://api.cohere.ai/compatibility/v1
 
-      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
+      GEMINI_MODEL: gemini-3.8-flash
       GEMINI_THINKING_LEVEL: low
 
       PROVIDER_TIMEOUT_SECONDS: "90"

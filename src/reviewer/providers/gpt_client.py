@@ -13,15 +13,17 @@ class GPTClient:
         self,
         *,
         api_key: str,
-        model: str = "gpt-oss-120b",
-        base_url: str = "https://api.cerebras.ai/v1",
+        model: str = "command-a-plus-05-2026",
+        base_url: str = (
+            "https://api.cohere.ai/compatibility/v1"
+        ),
         timeout_seconds: float = 120.0,
         max_output_tokens: int = 800,
         max_findings: int = 5,
     ) -> None:
         if not api_key.strip():
             raise ValueError(
-                "CEREBRAS_API_KEY가 비어 있습니다."
+                "COHERE_API_KEY가 비어 있습니다."
             )
 
         if not model.strip():
@@ -65,7 +67,7 @@ class GPTClient:
                     model=self.model,
                     messages=[
                         {
-                            "role": "system",
+                            "role": "developer",
                             "content": GPT_SYSTEM_PROMPT,
                         },
                         {
@@ -74,9 +76,7 @@ class GPTClient:
                         },
                     ],
                     temperature=0.1,
-                    max_completion_tokens=(
-                        self.max_output_tokens
-                    ),
+                    max_tokens=self.max_output_tokens,
                     response_format={
                         "type": "json_object",
                     },

@@ -81,7 +81,8 @@ class ProviderTests(unittest.TestCase):
     @patch(
         "reviewer.providers.gpt_client.OpenAI"
     )
-    def test_gpt_uses_cerebras_and_requests_json(
+
+    def test_gpt_uses_cohere_and_requests_json(
         self,
         openai_class,
     ) -> None:
@@ -91,7 +92,7 @@ class ProviderTests(unittest.TestCase):
         )
 
         provider = GPTClient(
-            api_key="test-cerebras-key",
+            api_key="test-cohere-key",
         )
         findings = provider.review("PR Diff")
 
@@ -106,7 +107,7 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(
             constructor_arguments["base_url"],
-            "https://api.cerebras.ai/v1",
+            "https://api.cohere.ai/compatibility/v1",
         )
         self.assertEqual(
             constructor_arguments["max_retries"],
@@ -119,21 +120,24 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(
             call_arguments["model"],
-            "gpt-oss-120b",
+            "command-a-plus-05-2026",
+        )
+        self.assertEqual(
+            call_arguments["messages"][0]["role"],
+            "developer",
         )
         self.assertEqual(
             call_arguments["response_format"],
             {"type": "json_object"},
         )
         self.assertEqual(
-            call_arguments["max_completion_tokens"],
+            call_arguments["max_tokens"],
             800,
         )
         self.assertNotIn(
-            "max_tokens",
+            "max_completion_tokens",
             call_arguments,
         )
-
     @patch(
         "reviewer.providers.gemini_client.genai.Client"
     )
@@ -214,7 +218,7 @@ class ProviderTests(unittest.TestCase):
         )
 
         provider = GPTClient(
-            api_key="test-cerebras-key",
+            api_key="test-cohere-key",
         )
 
         with self.assertRaises(ProviderError):
