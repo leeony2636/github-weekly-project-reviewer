@@ -165,7 +165,7 @@ class RuntimeConfig:
                 "MAX_OUTPUT_TOKENS",
                 800,
                 minimum=100,
-                maximum=1200,
+                maximum=4096,
             ),
             qwen_input_char_limit=_read_int(
                 "QWEN_INPUT_CHAR_LIMIT",

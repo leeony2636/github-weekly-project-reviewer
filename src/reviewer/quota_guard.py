@@ -38,7 +38,7 @@ class ProviderBudget:
 
     # 실제 설정에서 허용 가능한 최대 출력값을
     # 보수적으로 예약한다.
-    max_output_tokens: int = 1_200
+    max_output_tokens: int = 4_096
 
     # 무료 API 할당량을 보호하기 위해 실제 모델 한도보다
     # 보수적인 8,192토큰 상한을 적용한다.
