@@ -311,43 +311,52 @@ def select_review_inputs(
             "2000 이상이어야 합니다."
         )
 
-    qwen_files = _select_files(
+    code_risk_files = _select_files(
         review_input.files,
         provider="gpt",
         percent=gpt_percent,
     )
 
-    gemini_files = _select_files(
+    configuration_risk_files = _select_files(
         review_input.files,
         provider="gemini",
         percent=gemini_percent,
     )
 
-    gpt_files = _merge_unique_files(
-        qwen_files,
-        gemini_files,
+    common_files = _merge_unique_files(
+        code_risk_files,
+        configuration_risk_files,
     )
 
-    provider_prompts = {
-        "qwen": _build_selected_prompt(
-            review_input,
-            provider="qwen",
-            selected_files=qwen_files,
-            max_chars=qwen_input_char_limit,
-        ),
-        "gpt": _build_selected_prompt(
-            review_input,
-            provider="gpt",
-            selected_files=gpt_files,
-            max_chars=cloud_input_char_limit,
-        ),
-        "gemini": _build_selected_prompt(
-            review_input,
-            provider="gemini",
-            selected_files=gemini_files,
-            max_chars=cloud_input_char_limit,
-        ),
-    }
+    common_input_char_limit = min(
+        qwen_input_char_limit,
+        cloud_input_char_limit,
+    )
+
+    common_prompt = _build_selected_prompt(
+        review_input,
+        provider="shared",
+        selected_files=common_files,
+        max_chars=common_input_char_limit,
+    )
+
+    common_file_names = tuple(
+        item.filename
+        for item in common_files
+    )
+
+    return ReviewSelection(
+        provider_prompts={
+            "qwen": common_prompt,
+            "gpt": common_prompt,
+            "gemini": common_prompt,
+        },
+        selected_files={
+            "qwen": common_file_names,
+            "gpt": common_file_names,
+            "gemini": common_file_names,
+        },
+    )
 
     selected_files = {
         "qwen": tuple(

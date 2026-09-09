@@ -43,15 +43,15 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             config.max_qwen_calls_per_run,
-            1,
+            5,
         )
         self.assertEqual(
             config.max_gpt_calls_per_run,
-            1,
+            5,
         )
         self.assertEqual(
             config.max_gemini_calls_per_run,
-            1,
+            6,
         )
 
     def test_uses_safe_input_defaults(self) -> None:

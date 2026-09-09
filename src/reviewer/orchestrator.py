@@ -7,20 +7,25 @@ from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
 
 from reviewer.consensus import (
-    build_consensus,
+    build_cross_review_consensus,
+    build_review_candidates,
     filter_valid_line_findings,
 )
 from reviewer.diff_parser import ground_findings
+from reviewer.prompts.cross_review_prompt import (
+    CrossReviewPromptBatch,
+    build_cross_review_batches,
+)
 from reviewer.quota_guard import (
     QuotaBlockedError,
     QuotaGuard,
 )
 from reviewer.schemas import (
     ConsensusFinding,
+    CrossReviewVote,
     Finding,
     SchemaError,
 )
-
 
 EXPECTED_PROVIDERS = {
     "qwen",
@@ -38,6 +43,13 @@ class ReviewProvider(Protocol):
     ) -> list[Finding]:
         ...
 
+    def cross_review(
+        self,
+        user_prompt: str,
+        *,
+        candidate_ids: Sequence[str],
+    ) -> list[CrossReviewVote]:
+        ...
 
 class OrchestrationError(RuntimeError):
     pass
@@ -139,7 +151,7 @@ class ReviewOrchestrator:
         timeout_seconds: int = 120,
         line_tolerance: int = 1,
         min_match_count: int = 2,
-        min_successful_providers: int = 2,
+        min_successful_providers: int = 3,
     ) -> None:
         provider_names = [
             provider.provider
@@ -164,10 +176,10 @@ class ReviewOrchestrator:
                 "timeout_seconds는 1 이상이어야 합니다."
             )
 
-        if not 2 <= min_successful_providers <= 3:
+        if min_successful_providers != 3:
             raise ValueError(
-                "min_successful_providers는 "
-                "2 이상 3 이하여야 합니다."
+                "1차 분석은 세 모델 모두 "
+                "성공해야 합니다."
             )
 
         self.providers = tuple(providers)
@@ -178,6 +190,218 @@ class ReviewOrchestrator:
         self.min_successful_providers = (
             min_successful_providers
         )
+
+    def _run_cross_review_batch(
+        self,
+        *,
+        batch: CrossReviewPromptBatch,
+        providers_by_name: Mapping[
+            str,
+            ReviewProvider,
+        ],
+    ) -> list[CrossReviewVote]:
+        executor = ThreadPoolExecutor(
+            max_workers=len(self.providers),
+            thread_name_prefix="cross-review-provider",
+        )
+
+        future_to_provider: dict[
+            Future[list[CrossReviewVote]],
+            str,
+        ] = {}
+
+        failures: dict[str, str] = {}
+        votes: list[CrossReviewVote] = []
+
+        try:
+            for provider in self.providers:
+                provider_name = provider.provider
+
+                try:
+                    self.quota_guard.reserve(
+                        provider=provider_name,
+                        prompt=batch.prompt,
+                    )
+                except QuotaBlockedError as exc:
+                    failures[provider_name] = (
+                        type(exc).__name__
+                    )
+                    continue
+
+                future = executor.submit(
+                    provider.cross_review,
+                    batch.prompt,
+                    candidate_ids=(
+                        batch.candidate_ids
+                    ),
+                )
+                future_to_provider[future] = (
+                    provider_name
+                )
+
+            done, not_done = wait(
+                future_to_provider,
+                timeout=self.timeout_seconds,
+            )
+
+            for future in done:
+                provider_name = (
+                    future_to_provider[future]
+                )
+
+                try:
+                    provider_votes = future.result()
+
+                except Exception as exc:
+                    self.quota_guard.record_failure(
+                        provider_name,
+                        exc,
+                    )
+
+                    if not _is_retryable_gemini_error(
+                        provider_name,
+                        exc,
+                    ):
+                        failures[provider_name] = (
+                            _safe_error_type(exc)
+                        )
+                        continue
+
+                    try:
+                        self.quota_guard.reserve(
+                            provider=provider_name,
+                            prompt=batch.prompt,
+                        )
+
+                    except QuotaBlockedError as retry_error:
+                        failures[provider_name] = (
+                            type(retry_error).__name__
+                        )
+                        continue
+
+                    retry_future = executor.submit(
+                        providers_by_name[
+                            provider_name
+                        ].cross_review,
+                        batch.prompt,
+                        candidate_ids=(
+                            batch.candidate_ids
+                        ),
+                    )
+
+                    retry_done, retry_not_done = wait(
+                        {retry_future},
+                        timeout=self.timeout_seconds,
+                    )
+
+                    if retry_not_done:
+                        timeout_error = TimeoutError(
+                            "cross-review retry timeout"
+                        )
+                        self.quota_guard.record_failure(
+                            provider_name,
+                            timeout_error,
+                        )
+                        failures[provider_name] = (
+                            "TimeoutError"
+                        )
+                        retry_future.cancel()
+                        continue
+
+                    try:
+                        provider_votes = (
+                            retry_future.result()
+                        )
+
+                    except Exception as retry_error:
+                        self.quota_guard.record_failure(
+                            provider_name,
+                            retry_error,
+                        )
+                        failures[provider_name] = (
+                            _safe_error_type(
+                                retry_error
+                            )
+                        )
+                        continue
+
+                provider_identity_is_valid = all(
+                    vote.provider == provider_name
+                    for vote in provider_votes
+                )
+
+                if not provider_identity_is_valid:
+                    mismatch_error = RuntimeError(
+                        "cross-review provider "
+                        "identity mismatch"
+                    )
+                    self.quota_guard.record_failure(
+                        provider_name,
+                        mismatch_error,
+                    )
+                    failures[provider_name] = (
+                        "ProviderIdentityMismatch"
+                    )
+                    continue
+
+                self.quota_guard.record_success(
+                    provider_name
+                )
+                votes.extend(provider_votes)
+
+            for future in not_done:
+                provider_name = (
+                    future_to_provider[future]
+                )
+
+                timeout_error = TimeoutError(
+                    "cross-review provider timeout"
+                )
+
+                self.quota_guard.record_failure(
+                    provider_name,
+                    timeout_error,
+                )
+                failures[provider_name] = (
+                    "TimeoutError"
+                )
+                future.cancel()
+
+        finally:
+            executor.shutdown(
+                wait=False,
+                cancel_futures=True,
+            )
+
+        successful_providers = {
+            vote.provider
+            for vote in votes
+        }
+
+        if (
+            failures
+            or successful_providers
+            != EXPECTED_PROVIDERS
+        ):
+            failure_details = (
+                ", ".join(
+                    (
+                        f"{provider}"
+                        f"({error_type})"
+                    )
+                    for provider, error_type
+                    in sorted(failures.items())
+                )
+                or "응답 누락"
+            )
+
+            raise OrchestrationError(
+                "2차 교차평가에 세 모델 모두 "
+                "참여하지 못했습니다. "
+                f"실패={failure_details}"
+            )
+
+        return votes
 
     def run(
         self,
@@ -208,7 +432,11 @@ class ReviewOrchestrator:
                 raise ValueError(
                     f"{provider} prompt가 비어 있습니다."
                 )
-
+        if len(set(provider_prompts.values())) != 1:
+            raise ValueError(
+                "1차 분석은 세 모델 모두 동일한 "
+                "공통 입력을 사용해야 합니다."
+            )
         executor = ThreadPoolExecutor(
             max_workers=len(self.providers),
             thread_name_prefix="review-provider",
@@ -435,11 +663,40 @@ class ReviewOrchestrator:
             )
         )
 
-        consensus_findings = build_consensus(
+        review_candidates = build_review_candidates(
             grounded_findings,
-            valid_lines,
             line_tolerance=self.line_tolerance,
-            min_match_count=self.min_match_count,
+        )
+
+        cross_review_votes: list[
+            CrossReviewVote
+        ] = []
+
+        if review_candidates:
+            cross_review_batches = (
+                build_cross_review_batches(
+                    review_candidates
+                )
+            )
+
+            for batch in cross_review_batches:
+                cross_review_votes.extend(
+                    self._run_cross_review_batch(
+                        batch=batch,
+                        providers_by_name=(
+                            providers_by_name
+                        ),
+                    )
+                )
+
+        consensus_findings = (
+            build_cross_review_consensus(
+                review_candidates,
+                cross_review_votes,
+                min_accept_count=(
+                    self.min_match_count
+                ),
+            )
         )
 
         return ReviewRun(

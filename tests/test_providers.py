@@ -32,6 +32,26 @@ def model_response_json() -> str:
         ensure_ascii=False,
     )
 
+def cross_review_response_json() -> str:
+    return json.dumps(
+        {
+            "votes": [
+                {
+                    "candidate_id": "candidate-001",
+                    "decision": "accept",
+                    "reason": (
+                        "코드 근거를 확인했습니다."
+                    ),
+                    "severity": "P1",
+                    "message": (
+                        "None 입력에서 예외가 발생합니다."
+                    ),
+                    "confidence": 0.85,
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
 
 def openai_response() -> SimpleNamespace:
     return SimpleNamespace(
@@ -76,6 +96,59 @@ class ProviderTests(unittest.TestCase):
         self.assertIn(
             "huggingface.co",
             constructor_arguments["base_url"],
+        )
+
+    @patch(
+        "reviewer.providers.qwen_client.OpenAI"
+    )
+    def test_qwen_cross_reviews_candidates(
+        self,
+        openai_class,
+    ) -> None:
+        sdk_client = openai_class.return_value
+        sdk_client.chat.completions.create.return_value = (
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                cross_review_response_json()
+                            )
+                        )
+                    )
+                ]
+            )
+        )
+
+        provider = QwenClient(
+            api_key="test-hf-token",
+        )
+
+        votes = provider.cross_review(
+            "교차평가 후보",
+            candidate_ids=(
+                "candidate-001",
+            ),
+        )
+
+        self.assertEqual(len(votes), 1)
+        self.assertEqual(
+            votes[0].provider,
+            "qwen",
+        )
+
+        call_arguments = (
+            sdk_client.chat.completions
+            .create.call_args.kwargs
+        )
+
+        self.assertEqual(
+            call_arguments["messages"][0]["role"],
+            "system",
+        )
+        self.assertEqual(
+            call_arguments["messages"][1]["content"],
+            "교차평가 후보",
         )
 
     @patch(
@@ -180,6 +253,81 @@ class ProviderTests(unittest.TestCase):
             4_096,
         )
 
+    @patch(
+        "reviewer.providers.gpt_client.cohere.ClientV2"
+    )
+    def test_gpt_cross_review_uses_json_schema(
+        self,
+        cohere_class,
+    ) -> None:
+        sdk_client = cohere_class.return_value
+        sdk_client.chat.return_value = (
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="thinking",
+                            thinking=(
+                                "internal reasoning"
+                            ),
+                        ),
+                        SimpleNamespace(
+                            type="text",
+                            text=(
+                                cross_review_response_json()
+                            ),
+                        ),
+                    ],
+                ),
+            )
+        )
+
+        provider = GPTClient(
+            api_key="test-cohere-key",
+            max_output_tokens=8_192,
+        )
+
+        votes = provider.cross_review(
+            "교차평가 후보",
+            candidate_ids=(
+                "candidate-001",
+            ),
+        )
+
+        self.assertEqual(len(votes), 1)
+        self.assertEqual(
+            votes[0].provider,
+            "gpt",
+        )
+
+        call_arguments = (
+            sdk_client.chat.call_args.kwargs
+        )
+        response_format = call_arguments[
+            "response_format"
+        ]
+        response_schema = (
+            response_format.json_schema
+        )
+
+        self.assertIsNotNone(response_schema)
+        assert response_schema is not None
+
+        self.assertEqual(
+            response_schema["required"],
+            ["votes"],
+        )
+        self.assertEqual(
+            response_schema["properties"]
+            ["votes"]["items"]["properties"]
+            ["candidate_id"]["enum"],
+            ["candidate-001"],
+        )
+        self.assertEqual(
+            call_arguments["messages"][1]
+            ["content"],
+            "교차평가 후보",
+        )
 
     @patch(
         "reviewer.providers.gemini_client.genai.Client"
@@ -321,6 +469,77 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertIsNone(
             config.temperature,
+        )
+
+    @patch(
+        "reviewer.providers.gemini_client.genai.Client"
+    )
+    def test_gemini_cross_review_uses_json_schema(
+        self,
+        client_class,
+    ) -> None:
+        sdk_client = client_class.return_value
+        sdk_client.models.generate_content.return_value = (
+            SimpleNamespace(
+                text=(
+                    cross_review_response_json()
+                )
+            )
+        )
+
+        provider = GeminiClient(
+            api_key="test-gemini-key",
+            model="gemini-3.8-flash",
+            thinking_level="low",
+        )
+
+        votes = provider.cross_review(
+            "교차평가 후보",
+            candidate_ids=(
+                "candidate-001",
+            ),
+        )
+
+        self.assertEqual(len(votes), 1)
+        self.assertEqual(
+            votes[0].provider,
+            "gemini",
+        )
+
+        call_arguments = (
+            sdk_client.models.generate_content
+            .call_args.kwargs
+        )
+        config = call_arguments["config"]
+
+        self.assertEqual(
+            call_arguments["contents"],
+            "교차평가 후보",
+        )
+        self.assertEqual(
+            config.response_mime_type,
+            "application/json",
+        )
+
+        response_schema = (
+            config.response_json_schema
+        )
+
+        self.assertIsNotNone(response_schema)
+        assert response_schema is not None
+
+        self.assertEqual(
+            response_schema["required"],
+            ["votes"],
+        )
+        self.assertEqual(
+            response_schema["properties"]
+            ["votes"]["items"]["properties"]
+            ["candidate_id"]["enum"],
+            ["candidate-001"],
+        )
+        self.assertIsNone(
+            config.temperature
         )
 
 if __name__ == "__main__":

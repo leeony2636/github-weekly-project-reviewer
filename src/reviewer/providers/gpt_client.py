@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 import cohere
 from cohere.types import (
@@ -6,13 +6,19 @@ from cohere.types import (
     Thinking,
 )
 
+from reviewer.prompts.cross_review_prompt import (
+    CROSS_REVIEW_SYSTEM_PROMPT,
+)
 from reviewer.prompts.gpt_prompt import GPT_SYSTEM_PROMPT
+
 from reviewer.schemas import (
+    CrossReviewVote,
     Finding,
+    build_cross_review_response_schema,
     build_model_response_schema,
+    parse_cross_review_response,
     parse_model_response,
 )
-
 from . import ProviderError
 
 class GPTClient:
@@ -166,5 +172,80 @@ class GPTClient:
             raise ProviderError(
                 self.provider,
                 "리뷰 호출",
+                exc,
+            ) from exc
+
+    def cross_review(
+        self,
+        user_prompt: str,
+        *,
+        candidate_ids: Sequence[str],
+    ) -> list[CrossReviewVote]:
+        if not candidate_ids:
+            raise ValueError(
+                "교차평가 후보가 비어 있습니다."
+            )
+
+        try:
+            response = self.client.chat(
+                model=self.model,
+                messages=cast(
+                    Any,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                CROSS_REVIEW_SYSTEM_PROMPT
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": user_prompt,
+                        },
+                    ],
+                ),
+                temperature=0.1,
+                max_tokens=self.max_output_tokens,
+                thinking=self.thinking,
+                response_format=(
+                    JsonObjectResponseFormatV2(
+                        type="json_object",
+                        json_schema=(
+                            build_cross_review_response_schema(
+                                candidate_ids
+                            )
+                        ),
+                    )
+                ),
+            )
+
+            content_items = (
+                response.message.content or []
+            )
+            text_parts: list[str] = []
+
+            for item in content_items:
+                text = getattr(item, "text", None)
+
+                if isinstance(text, str):
+                    text_parts.append(text)
+
+            content = "".join(text_parts)
+
+            return parse_cross_review_response(
+                content,
+                provider=self.provider,
+                expected_candidate_ids=(
+                    candidate_ids
+                ),
+            )
+
+        except ProviderError:
+            raise
+
+        except Exception as exc:
+            raise ProviderError(
+                self.provider,
+                "교차평가 호출",
                 exc,
             ) from exc

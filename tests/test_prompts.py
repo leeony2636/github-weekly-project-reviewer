@@ -1,5 +1,10 @@
 import unittest
 
+from reviewer.prompts.cross_review_prompt import (
+    CrossReviewPromptError,
+    build_cross_review_batches,
+)
+from reviewer.schemas import ReviewCandidate
 from reviewer.prompts import (
     BASE_RULES,
     JSON_CONTRACT,
@@ -63,6 +68,41 @@ class PromptTests(unittest.TestCase):
             QWEN_SYSTEM_PROMPT,
         )
 
+    def test_limits_cross_review_to_four_batches(
+        self,
+    ) -> None:
+        candidates = [
+            ReviewCandidate(
+                candidate_id=(
+                    f"candidate-{index:03d}"
+                ),
+                file="src/example.py",
+                line=index,
+                category="bug",
+                severity="P1",
+                message="문제" * 600,
+                reason="후보 생성 테스트",
+                confidence=0.8,
+                evidence="value = source.value",
+                evidence_hash="test-hash",
+                source_providers=("qwen",),
+            )
+            for index in range(1, 6)
+        ]
+
+        with self.assertRaises(
+            CrossReviewPromptError
+        ) as context:
+            build_cross_review_batches(
+                candidates,
+                max_chars=2_000,
+                max_batches=4,
+            )
+
+        self.assertIn(
+            "호출 허용 범위",
+            str(context.exception),
+        )
 
 if __name__ == "__main__":
     unittest.main()

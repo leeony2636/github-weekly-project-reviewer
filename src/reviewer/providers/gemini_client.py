@@ -1,13 +1,18 @@
 from google import genai
 from google.genai import types
-
+from typing import Sequence
 from reviewer.prompts.gemini_prompt import (
     GEMINI_SYSTEM_PROMPT,
 )
-
+from reviewer.prompts.cross_review_prompt import (
+    CROSS_REVIEW_SYSTEM_PROMPT,
+)
 from reviewer.schemas import (
+    CrossReviewVote,
     Finding,
+    build_cross_review_response_schema,
     build_model_response_schema,
+    parse_cross_review_response,
     parse_model_response,
 )
 
@@ -122,5 +127,67 @@ class GeminiClient:
             raise ProviderError(
                 self.provider,
                 "리뷰 호출",
+                exc,
+            ) from exc
+
+    def cross_review(
+        self,
+        user_prompt: str,
+        *,
+        candidate_ids: Sequence[str],
+    ) -> list[CrossReviewVote]:
+        if not candidate_ids:
+            raise ValueError(
+                "교차평가 후보가 비어 있습니다."
+            )
+
+        try:
+            response = (
+                self.client.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=(
+                            CROSS_REVIEW_SYSTEM_PROMPT
+                        ),
+                        thinking_config=(
+                            types.ThinkingConfig(
+                                thinking_level=(
+                                    self.thinking_level
+                                ),
+                            )
+                        ),
+                        max_output_tokens=(
+                            self.max_output_tokens
+                        ),
+                        response_mime_type=(
+                            "application/json"
+                        ),
+                        response_json_schema=(
+                            build_cross_review_response_schema(
+                                candidate_ids
+                            )
+                        ),
+                    ),
+                )
+            )
+
+            content = response.text or ""
+
+            return parse_cross_review_response(
+                content,
+                provider=self.provider,
+                expected_candidate_ids=(
+                    candidate_ids
+                ),
+            )
+
+        except ProviderError:
+            raise
+
+        except Exception as exc:
+            raise ProviderError(
+                self.provider,
+                "교차평가 호출",
                 exc,
             ) from exc

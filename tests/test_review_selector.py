@@ -183,7 +183,7 @@ class ReviewSelectorTests(unittest.TestCase):
             10,
         )
 
-    def test_gpt_connects_both_review_areas(
+    def test_all_models_receive_common_review_area(
         self,
     ) -> None:
         selection = select_review_inputs(
@@ -192,25 +192,29 @@ class ReviewSelectorTests(unittest.TestCase):
             gemini_percent=10,
         )
 
-        gpt_files = set(
-            selection.selected_files["gpt"]
-        )
-        qwen_files = set(
-            selection.selected_files["qwen"]
-        )
-        gemini_files = set(
-            selection.selected_files["gemini"]
-        )
-
-        self.assertTrue(
-            qwen_files.issubset(gpt_files)
-        )
-        self.assertTrue(
-            gemini_files.issubset(gpt_files)
+        self.assertEqual(
+            selection.selected_files["qwen"],
+            selection.selected_files["gpt"],
         )
         self.assertEqual(
+            selection.selected_files["qwen"],
             selection.selected_files["gemini"],
-            ("requirements.txt",),
+        )
+        self.assertEqual(
+            selection.selected_files["qwen"],
+            (
+                "src/auth_service.py",
+                "requirements.txt",
+            ),
+        )
+
+        self.assertEqual(
+            selection.provider_prompts["qwen"],
+            selection.provider_prompts["gpt"],
+        )
+        self.assertEqual(
+            selection.provider_prompts["qwen"],
+            selection.provider_prompts["gemini"],
         )
 
     def test_prompts_contain_selected_files_only(

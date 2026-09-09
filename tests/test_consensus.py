@@ -1,8 +1,14 @@
 import unittest
 
-from reviewer.consensus import build_consensus
-from reviewer.schemas import Finding
-
+from reviewer.consensus import (
+    build_consensus,
+    build_cross_review_consensus,
+    build_review_candidates,
+)
+from reviewer.schemas import (
+    CrossReviewVote,
+    Finding,
+)
 
 def make_finding(
     provider: str,
@@ -25,7 +31,22 @@ def make_finding(
         reason=reason,
         confidence=confidence,
     )
-
+def make_vote(
+    provider: str,
+    candidate_id: str,
+    *,
+    decision: str = "accept",
+    confidence: float = 0.8,
+) -> CrossReviewVote:
+    return CrossReviewVote(
+        provider=provider,
+        candidate_id=candidate_id,
+        decision=decision,
+        reason="코드 근거를 확인했습니다.",
+        severity="P1",
+        message="None 입력에서 예외가 발생합니다.",
+        confidence=confidence,
+    )
 
 class ConsensusTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -184,6 +205,147 @@ class ConsensusTests(unittest.TestCase):
             0.8,
         )
 
+    def test_builds_common_candidate_from_models(
+        self,
+    ) -> None:
+        candidates = build_review_candidates(
+            [
+                make_finding("qwen"),
+                make_finding(
+                    "gpt",
+                    message=(
+                        "None 입력 시 예외가 발생합니다."
+                    ),
+                ),
+                make_finding(
+                    "gemini",
+                    message=(
+                        "None 입력에서 예외가 "
+                        "발생할 수 있습니다."
+                    ),
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            len(candidates),
+            1,
+        )
+        self.assertEqual(
+            candidates[0].candidate_id,
+            "candidate-001",
+        )
+        self.assertEqual(
+            candidates[0].source_providers,
+            ("qwen", "gpt", "gemini"),
+        )
+
+    def test_cross_review_accepts_two_votes(
+        self,
+    ) -> None:
+        candidates = build_review_candidates(
+            [make_finding("qwen")]
+        )
+        candidate_id = candidates[0].candidate_id
+
+        result = build_cross_review_consensus(
+            candidates,
+            [
+                make_vote(
+                    "qwen",
+                    candidate_id,
+                    decision="accept",
+                ),
+                make_vote(
+                    "gpt",
+                    candidate_id,
+                    decision="revise",
+                ),
+                make_vote(
+                    "gemini",
+                    candidate_id,
+                    decision=(
+                        "reject_unsupported"
+                    ),
+                ),
+            ],
+        )
+
+        self.assertEqual(
+            len(result),
+            1,
+        )
+        self.assertEqual(
+            result[0].providers,
+            ("qwen", "gpt"),
+        )
+        self.assertEqual(
+            result[0].match_count,
+            2,
+        )
+
+    def test_cross_review_rejects_two_rejections(
+        self,
+    ) -> None:
+        candidates = build_review_candidates(
+            [make_finding("qwen")]
+        )
+        candidate_id = candidates[0].candidate_id
+
+        result = build_cross_review_consensus(
+            candidates,
+            [
+                make_vote(
+                    "qwen",
+                    candidate_id,
+                    decision="accept",
+                ),
+                make_vote(
+                    "gpt",
+                    candidate_id,
+                    decision="reject_not_issue",
+                ),
+                make_vote(
+                    "gemini",
+                    candidate_id,
+                    decision=(
+                        "reject_unsupported"
+                    ),
+                ),
+            ],
+        )
+
+        self.assertEqual(result, [])
+
+    def test_cross_review_requires_all_models(
+        self,
+    ) -> None:
+        candidates = build_review_candidates(
+            [make_finding("qwen")]
+        )
+        candidate_id = candidates[0].candidate_id
+
+        with self.assertRaises(
+            ValueError
+        ) as context:
+            build_cross_review_consensus(
+                candidates,
+                [
+                    make_vote(
+                        "qwen",
+                        candidate_id,
+                    ),
+                    make_vote(
+                        "gpt",
+                        candidate_id,
+                    ),
+                ],
+            )
+
+        self.assertIn(
+            "세 모델 모두 평가하지 않았습니다",
+            str(context.exception),
+        )
 
 if __name__ == "__main__":
     unittest.main()

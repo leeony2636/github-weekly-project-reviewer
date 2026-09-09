@@ -179,7 +179,7 @@ def create_orchestrator(
             max_findings=max_findings,
         ),
     ]
-    
+
     quota_guard = QuotaGuard(
         {
             "qwen": ProviderBudget(
@@ -187,7 +187,7 @@ def create_orchestrator(
                     get_config_value(
                         config,
                         "max_qwen_calls_per_run",
-                        1,
+                        5,
                     )
                 ),
                 max_input_chars=(
@@ -202,7 +202,7 @@ def create_orchestrator(
                     get_config_value(
                         config,
                         "max_gpt_calls_per_run",
-                        1,
+                        5,
                     )
                 ),
                 max_input_chars=(
@@ -221,7 +221,7 @@ def create_orchestrator(
                     get_config_value(
                         config,
                         "max_gemini_calls_per_run",
-                        1,
+                        6,
                     )
                 ),
                 max_input_chars=(
@@ -246,7 +246,7 @@ def create_orchestrator(
             get_config_value(
                 config,
                 "min_successful_providers",
-                2,
+                3,
             )
         ),
     )

@@ -201,8 +201,8 @@ class RuntimeConfig:
             ),
             min_successful_providers=_read_int(
                 "MIN_SUCCESSFUL_PROVIDERS",
-                2,
-                minimum=2,
+                3,
+                minimum=3,
                 maximum=3,
             ),
 
@@ -221,21 +221,21 @@ class RuntimeConfig:
 
             max_qwen_calls_per_run=_read_int(
                 "MAX_QWEN_CALLS_PER_RUN",
-                1,
+                5,
                 minimum=0,
-                maximum=1,
+                maximum=5,
             ),
             max_gpt_calls_per_run=_read_int(
                 "MAX_GPT_CALLS_PER_RUN",
-                1,
+                5,
                 minimum=0,
-                maximum=1,
+                maximum=5,
             ),
             max_gemini_calls_per_run=_read_int(
                 "MAX_GEMINI_CALLS_PER_RUN",
-                1,
+                6,
                 minimum=0,
-                maximum=2,
+                maximum=6,
             ),
 
             free_only_mode=_read_bool(
