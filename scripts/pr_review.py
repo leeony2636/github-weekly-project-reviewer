@@ -149,7 +149,7 @@ def create_orchestrator(
                 config.provider_timeout_seconds
             ),
             max_output_tokens=(
-                gpt_max_output_tokens
+                max_output_tokens
             ),
             max_findings=max_findings,
         ),
@@ -160,7 +160,9 @@ def create_orchestrator(
             timeout_seconds=(
                 config.provider_timeout_seconds
             ),
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=(
+                gpt_max_output_tokens
+            ),
             max_findings=max_findings,
         ),
         GeminiClient(
@@ -177,7 +179,7 @@ def create_orchestrator(
             max_findings=max_findings,
         ),
     ]
-
+    
     quota_guard = QuotaGuard(
         {
             "qwen": ProviderBudget(
