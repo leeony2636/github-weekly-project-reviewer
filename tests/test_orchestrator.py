@@ -121,11 +121,11 @@ def make_guard(
     return QuotaGuard(
         {
             "qwen": ProviderBudget(
-                max_calls=5,
+                max_calls=6,
                 max_input_chars=10_000,
             ),
             "gpt": ProviderBudget(
-                max_calls=5,
+                max_calls=6,
                 max_input_chars=10_000,
             ),
             "gemini": ProviderBudget(

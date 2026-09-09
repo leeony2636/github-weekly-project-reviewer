@@ -43,11 +43,11 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             config.max_qwen_calls_per_run,
-            5,
+            6,
         )
         self.assertEqual(
             config.max_gpt_calls_per_run,
-            5,
+            6,
         )
         self.assertEqual(
             config.max_gemini_calls_per_run,

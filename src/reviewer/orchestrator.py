@@ -92,11 +92,11 @@ def _safe_error_type(
 
     return error_type
 
-def _is_retryable_gemini_error(
+def _is_retryable_provider_error(
     provider: str,
     error: BaseException,
 ) -> bool:
-    if provider != "gemini":
+    if provider not in EXPECTED_PROVIDERS:
         return False
 
     current = error
@@ -123,7 +123,11 @@ def _is_retryable_gemini_error(
     ):
         return True
 
-    return type(current).__name__ == "ServerError"
+    return type(current).__name__ in {
+        "ServerError",
+        "InternalServerError",
+    }
+
 @dataclass(frozen=True, slots=True)
 class ReviewRun:
     consensus_findings: tuple[
@@ -258,7 +262,7 @@ class ReviewOrchestrator:
                         exc,
                     )
 
-                    if not _is_retryable_gemini_error(
+                    if not _is_retryable_provider_error(
                         provider_name,
                         exc,
                     ):
@@ -501,7 +505,7 @@ class ReviewOrchestrator:
                         exc,
                     )
 
-                    if not _is_retryable_gemini_error(
+                    if not _is_retryable_provider_error(
                         provider_name,
                         exc,
                     ):

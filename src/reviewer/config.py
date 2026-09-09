@@ -221,15 +221,15 @@ class RuntimeConfig:
 
             max_qwen_calls_per_run=_read_int(
                 "MAX_QWEN_CALLS_PER_RUN",
-                5,
+                6,
                 minimum=0,
-                maximum=5,
+                maximum=6,
             ),
             max_gpt_calls_per_run=_read_int(
                 "MAX_GPT_CALLS_PER_RUN",
-                5,
+                6,
                 minimum=0,
-                maximum=5,
+                maximum=6,
             ),
             max_gemini_calls_per_run=_read_int(
                 "MAX_GEMINI_CALLS_PER_RUN",
