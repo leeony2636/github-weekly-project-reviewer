@@ -87,10 +87,60 @@ class GPTClient:
                     Any,
                     {
                         "type": "json_object",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "findings": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file": {
+                                                "type": "string",
+                                            },
+                                            "line": {
+                                                "type": "integer",
+                                            },
+                                            "category": {
+                                                "type": "string",
+                                            },
+                                            "severity": {
+                                                "type": "string",
+                                            },
+                                            "message": {
+                                                "type": "string",
+                                            },
+                                            "reason": {
+                                                "type": "string",
+                                            },
+                                            "confidence": {
+                                                "type": "number",
+                                            },
+                                            "evidence": {
+                                                "type": "string",
+                                            },
+                                        },
+                                        "required": [
+                                            "file",
+                                            "line",
+                                            "category",
+                                            "severity",
+                                            "message",
+                                            "reason",
+                                            "confidence",
+                                            "evidence",
+                                        ],
+                                    },
+                                },
+                            },
+                            "required": [
+                                "findings",
+                            ],
+                        },
                     },
                 ),
             )
-
+            
             content_items = (
                 response.message.content or []
             )
