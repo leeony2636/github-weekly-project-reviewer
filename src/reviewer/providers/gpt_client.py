@@ -1,9 +1,85 @@
-from openai import OpenAI
+from typing import Any, cast
+
+import cohere
 
 from reviewer.prompts.gpt_prompt import GPT_SYSTEM_PROMPT
 from reviewer.schemas import Finding, parse_model_response
 
 from . import ProviderError
+
+
+def _build_response_format(
+    max_findings: int,
+) -> dict[str, Any]:
+    return {
+        "type": "json_object",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "maxItems": max_findings,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": {
+                                "type": "string",
+                            },
+                            "line": {
+                                "type": "integer",
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": [
+                                    "syntax",
+                                    "quality",
+                                    "bug",
+                                    "security",
+                                    "performance",
+                                    "compatibility",
+                                    "architecture",
+                                    "test",
+                                ],
+                            },
+                            "severity": {
+                                "type": "string",
+                                "enum": [
+                                    "P0",
+                                    "P1",
+                                    "P2",
+                                ],
+                            },
+                            "message": {
+                                "type": "string",
+                            },
+                            "reason": {
+                                "type": "string",
+                            },
+                            "confidence": {
+                                "type": "number",
+                            },
+                            "evidence": {
+                                "type": "string",
+                            },
+                        },
+                        "required": [
+                            "file",
+                            "line",
+                            "category",
+                            "severity",
+                            "message",
+                            "reason",
+                            "confidence",
+                            "evidence",
+                        ],
+                    },
+                },
+            },
+            "required": [
+                "findings",
+            ],
+        },
+    }
 
 
 class GPTClient:
@@ -50,11 +126,13 @@ class GPTClient:
         self.max_output_tokens = max_output_tokens
         self.max_findings = max_findings
 
-        self.client = OpenAI(
+        # 기존 설정과의 호환을 위해 base_url 인수는 유지한다.
+        # 실제 호출 주소는 Cohere 전용 SDK의 기본 주소를 사용한다.
+        self.base_url = base_url
+
+        self.client = cohere.ClientV2(
             api_key=api_key,
-            base_url=base_url,
             timeout=timeout_seconds,
-            max_retries=0,
         )
 
     def review(
@@ -62,12 +140,13 @@ class GPTClient:
         user_prompt: str,
     ) -> list[Finding]:
         try:
-            response = (
-                self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+            response = self.client.chat(
+                model=self.model,
+                messages=cast(
+                    Any,
+                    [
                         {
-                            "role": "developer",
+                            "role": "system",
                             "content": GPT_SYSTEM_PROMPT,
                         },
                         {
@@ -75,84 +154,30 @@ class GPTClient:
                             "content": user_prompt,
                         },
                     ],
-                    temperature=0.1,
-                    max_tokens=self.max_output_tokens,
-                    response_format={  # pyright: ignore[reportArgumentType]
-                        "type": "json_object",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "findings": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "file": {
-                                                "type": "string",
-                                            },
-                                            "line": {
-                                                "type": "integer",
-                                            },
-                                            "category": {
-                                                "type": "string",
-                                                "enum": [
-                                                    "syntax",
-                                                    "quality",
-                                                    "bug",
-                                                    "security",
-                                                    "performance",
-                                                    "compatibility",
-                                                    "architecture",
-                                                    "test",
-                                                ],
-                                            },
-                                            "severity": {
-                                                "type": "string",
-                                                "enum": [
-                                                    "P0",
-                                                    "P1",
-                                                    "P2",
-                                                ],
-                                            },
-                                            "message": {
-                                                "type": "string",
-                                            },
-                                            "reason": {
-                                                "type": "string",
-                                            },
-                                            "confidence": {
-                                                "type": "number",
-                                            },
-                                            "evidence": {
-                                                "type": "string",
-                                            },
-                                        },
-                                        "required": [
-                                            "file",
-                                            "line",
-                                            "category",
-                                            "severity",
-                                            "message",
-                                            "reason",
-                                            "confidence",
-                                            "evidence",
-                                        ],
-                                    },
-                                },
-                            },
-                            "required": [
-                                "findings",
-                            ],
-                        },
-                    },
-                )
+                ),
+                temperature=0.1,
+                max_tokens=self.max_output_tokens,
+                response_format=cast(
+                    Any,
+                    _build_response_format(
+                        self.max_findings,
+                    ),
+                ),
             )
-               
 
-            content = (
-                response.choices[0].message.content
-                or ""
+            content_items = (
+                response.message.content or []
             )
+            text_parts = [
+                getattr(content_item, "text", "")
+                for content_item in content_items
+                if getattr(
+                    content_item,
+                    "type",
+                    None,
+                ) == "text"
+            ]
+            content = "".join(text_parts)
 
             return parse_model_response(
                 content,

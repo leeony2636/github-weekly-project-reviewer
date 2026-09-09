@@ -79,16 +79,33 @@ class ProviderTests(unittest.TestCase):
         )
 
     @patch(
-        "reviewer.providers.gpt_client.OpenAI"
+        "reviewer.providers.gpt_client.cohere.ClientV2"
     )
-
     def test_gpt_uses_cohere_and_requests_json(
         self,
-        openai_class,
+        cohere_class,
     ) -> None:
-        sdk_client = openai_class.return_value
-        sdk_client.chat.completions.create.return_value = (
+        sdk_client = cohere_class.return_value
+        response_text = (
             openai_response()
+            .choices[0]
+            .message.content
+        )
+        sdk_client.chat.return_value = (
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="thinking",
+                            thinking="internal reasoning",
+                        ),
+                        SimpleNamespace(
+                            type="text",
+                            text=response_text,
+                        ),
+                    ],
+                ),
+            )
         )
 
         provider = GPTClient(
@@ -103,20 +120,19 @@ class ProviderTests(unittest.TestCase):
         )
 
         constructor_arguments = (
-            openai_class.call_args.kwargs
+            cohere_class.call_args.kwargs
         )
         self.assertEqual(
-            constructor_arguments["base_url"],
-            "https://api.cohere.ai/compatibility/v1",
+            constructor_arguments["api_key"],
+            "test-cohere-key",
         )
         self.assertEqual(
-            constructor_arguments["max_retries"],
-            0,
+            constructor_arguments["timeout"],
+            120.0,
         )
 
         call_arguments = (
-            sdk_client.chat.completions
-            .create.call_args.kwargs
+            sdk_client.chat.call_args.kwargs
         )
         self.assertEqual(
             call_arguments["model"],
@@ -124,8 +140,9 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(
             call_arguments["messages"][0]["role"],
-            "developer",
+            "system",
         )
+
         response_format = call_arguments[
             "response_format"
         ]
@@ -137,18 +154,17 @@ class ProviderTests(unittest.TestCase):
             response_format["schema"]["required"],
             ["findings"],
         )
-        self.assertIn(
-            "findings",
-            response_format["schema"]["properties"],
+        self.assertEqual(
+            response_format["schema"]
+            ["properties"]["findings"]["maxItems"],
+            5,
         )
         self.assertEqual(
             call_arguments["max_tokens"],
             800,
         )
-        self.assertNotIn(
-            "max_completion_tokens",
-            call_arguments,
-        )
+
+
     @patch(
         "reviewer.providers.gemini_client.genai.Client"
     )
@@ -209,22 +225,23 @@ class ProviderTests(unittest.TestCase):
         )
 
     @patch(
-        "reviewer.providers.gpt_client.OpenAI"
+        "reviewer.providers.gpt_client.cohere.ClientV2"
     )
     def test_gpt_rejects_invalid_json(
         self,
-        openai_class,
+        cohere_class,
     ) -> None:
-        sdk_client = openai_class.return_value
-        sdk_client.chat.completions.create.return_value = (
+        sdk_client = cohere_class.return_value
+        sdk_client.chat.return_value = (
             SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="not-json"
-                        )
-                    )
-                ]
+                message=SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="text",
+                            text="not-json",
+                        ),
+                    ],
+                ),
             )
         )
 
