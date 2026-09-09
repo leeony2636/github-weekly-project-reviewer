@@ -80,6 +80,38 @@ def _safe_error_type(
 
     return error_type
 
+def _is_retryable_gemini_error(
+    provider: str,
+    error: BaseException,
+) -> bool:
+    if provider != "gemini":
+        return False
+
+    current = error
+
+    while current.__cause__ is not None:
+        current = current.__cause__
+
+    status_code = getattr(
+        current,
+        "status_code",
+        None,
+    )
+
+    if not isinstance(status_code, int):
+        status_code = getattr(
+            current,
+            "code",
+            None,
+        )
+
+    if (
+        isinstance(status_code, int)
+        and 500 <= status_code <= 599
+    ):
+        return True
+
+    return type(current).__name__ == "ServerError"
 @dataclass(frozen=True, slots=True)
 class ReviewRun:
     consensus_findings: tuple[
@@ -187,6 +219,11 @@ class ReviewOrchestrator:
             str,
         ] = {}
 
+        providers_by_name = {
+            provider.provider: provider
+            for provider in self.providers
+        }
+
         failures: dict[str, str] = {}
         successful: list[str] = []
         raw_findings: list[Finding] = []
@@ -229,15 +266,78 @@ class ReviewOrchestrator:
 
                 try:
                     findings = future.result()
+
                 except Exception as exc:
                     self.quota_guard.record_failure(
                         provider_name,
                         exc,
                     )
-                    failures[provider_name] = (
-                        _safe_error_type(exc)
+
+                    if not _is_retryable_gemini_error(
+                        provider_name,
+                        exc,
+                    ):
+                        failures[provider_name] = (
+                            _safe_error_type(exc)
+                        )
+                        continue
+
+                    prompt = provider_prompts[
+                        provider_name
+                    ]
+
+                    try:
+                        self.quota_guard.reserve(
+                            provider=provider_name,
+                            prompt=prompt,
+                        )
+
+                    except QuotaBlockedError as retry_error:
+                        failures[provider_name] = (
+                            type(retry_error).__name__
+                        )
+                        continue
+
+                    retry_future = executor.submit(
+                        providers_by_name[
+                            provider_name
+                        ].review,
+                        prompt,
                     )
-                    continue
+
+                    retry_done, retry_not_done = wait(
+                        {retry_future},
+                        timeout=self.timeout_seconds,
+                    )
+
+                    if retry_not_done:
+                        timeout_error = TimeoutError(
+                            "provider retry timeout"
+                        )
+                        self.quota_guard.record_failure(
+                            provider_name,
+                            timeout_error,
+                        )
+                        failures[provider_name] = (
+                            "TimeoutError"
+                        )
+                        retry_future.cancel()
+                        continue
+
+                    try:
+                        findings = retry_future.result()
+
+                    except Exception as retry_error:
+                        self.quota_guard.record_failure(
+                            provider_name,
+                            retry_error,
+                        )
+                        failures[provider_name] = (
+                            _safe_error_type(
+                                retry_error
+                            )
+                        )
+                        continue
 
                 provider_identity_is_valid = all(
                     finding.provider

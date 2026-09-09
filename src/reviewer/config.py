@@ -235,7 +235,7 @@ class RuntimeConfig:
                 "MAX_GEMINI_CALLS_PER_RUN",
                 1,
                 minimum=0,
-                maximum=1,
+                maximum=2,
             ),
 
             free_only_mode=_read_bool(
