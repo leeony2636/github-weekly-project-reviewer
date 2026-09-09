@@ -34,6 +34,54 @@ MODEL_FINDING_KEYS = {
 class SchemaError(ValueError):
     pass
 
+def build_model_response_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                        },
+                        "line": {
+                            "type": "integer",
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": sorted(CATEGORIES),
+                        },
+                        "severity": {
+                            "type": "string",
+                            "enum": sorted(SEVERITIES),
+                        },
+                        "message": {
+                            "type": "string",
+                        },
+                        "reason": {
+                            "type": "string",
+                        },
+                        "confidence": {
+                            "type": "number",
+                        },
+                        "evidence": {
+                            "type": "string",
+                        },
+                    },
+                    "required": sorted(
+                        MODEL_FINDING_KEYS
+                    ),
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": [
+            "findings",
+        ],
+        "additionalProperties": False,
+    }
 
 def _required_text(
     payload: dict[str, Any],

@@ -8,7 +8,7 @@ from reviewer.quota_guard import (
     ProviderBudget,
     QuotaGuard,
 )
-from reviewer.schemas import Finding
+from reviewer.schemas import Finding, SchemaError
 
 
 class FakeRateLimitError(RuntimeError):
@@ -193,6 +193,44 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(
             result.provider_failures,
             {"gemini": "RuntimeError"},
+        )
+
+    def test_labels_response_validation_failure(
+        self,
+    ) -> None:
+        providers = [
+            FakeProvider(
+                "qwen",
+                [finding("qwen")],
+            ),
+            FakeProvider(
+                "gpt",
+                error=SchemaError(
+                    "finding 필드가 정확하지 않습니다."
+                ),
+            ),
+            FakeProvider(
+                "gemini",
+                [finding("gemini")],
+            ),
+        ]
+
+        result = self.run_orchestrator(
+            providers
+        )
+
+        self.assertEqual(
+            result.successful_providers,
+            ("gemini", "qwen"),
+        )
+        self.assertEqual(
+            result.provider_failures,
+            {
+                "gpt": (
+                    "ResponseValidationError"
+                    "[cause=SchemaError]"
+                )
+            },
         )
 
     def test_stops_when_two_providers_fail(

@@ -71,7 +71,9 @@ class QuotaGuardTests(unittest.TestCase):
             snapshot["qwen"][
                 "estimated_total_tokens"
             ],
-            len("review") + 10 + 20,
+            (
+                len("review") + 10 + 1
+            ) // 2 + 20,
         )
 
     def test_blocks_second_call(self) -> None:
@@ -114,7 +116,7 @@ class QuotaGuardTests(unittest.TestCase):
             max_input_chars=100,
             system_prompt_char_reserve=4,
             max_output_tokens=4,
-            max_estimated_tokens_per_call=10,
+            max_estimated_tokens_per_call=7,
         )
 
         with self.assertRaises(

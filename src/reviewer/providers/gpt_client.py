@@ -1,12 +1,16 @@
 from typing import Any, cast
 
 import cohere
+from cohere.types import JsonObjectResponseFormatV2
 
 from reviewer.prompts.gpt_prompt import GPT_SYSTEM_PROMPT
-from reviewer.schemas import Finding, parse_model_response
+from reviewer.schemas import (
+    Finding,
+    build_model_response_schema,
+    parse_model_response,
+)
 
 from . import ProviderError
-
 
 class GPTClient:
     provider = "gpt"
@@ -83,64 +87,29 @@ class GPTClient:
                 ),
                 temperature=0.1,
                 max_tokens=self.max_output_tokens,
-                response_format=cast(
-                    Any,
-                    {
-                        "type": "json_object",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "findings": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "file": {
-                                                "type": "string",
-                                            },
-                                            "line": {
-                                                "type": "integer",
-                                            },
-                                            "category": {
-                                                "type": "string",
-                                            },
-                                            "severity": {
-                                                "type": "string",
-                                            },
-                                            "message": {
-                                                "type": "string",
-                                            },
-                                            "reason": {
-                                                "type": "string",
-                                            },
-                                            "confidence": {
-                                                "type": "number",
-                                            },
-                                            "evidence": {
-                                                "type": "string",
-                                            },
-                                        },
-                                        "required": [
-                                            "file",
-                                            "line",
-                                            "category",
-                                            "severity",
-                                            "message",
-                                            "reason",
-                                            "confidence",
-                                            "evidence",
-                                        ],
-                                    },
-                                },
-                            },
-                            "required": [
-                                "findings",
-                            ],
-                        },
-                    },
+                response_format=(
+                    JsonObjectResponseFormatV2(
+                        type="json_object",
+                        json_schema=(
+                            build_model_response_schema()
+                        ),
+                    )
                 ),
             )
-            
+
+            finish_reason = str(
+                getattr(
+                    response,
+                    "finish_reason",
+                    "",
+                )
+            ).upper()
+
+            if "MAX_TOKENS" in finish_reason:
+                raise ValueError(
+                    "Cohere 응답이 토큰 제한으로 잘렸습니다."
+                )
+
             content_items = (
                 response.message.content or []
             )

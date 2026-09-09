@@ -15,7 +15,11 @@ from reviewer.quota_guard import (
     QuotaBlockedError,
     QuotaGuard,
 )
-from reviewer.schemas import ConsensusFinding, Finding
+from reviewer.schemas import (
+    ConsensusFinding,
+    Finding,
+    SchemaError,
+)
 
 
 EXPECTED_PROVIDERS = {
@@ -42,9 +46,24 @@ def _safe_error_type(
     error: BaseException,
 ) -> str:
     current = error
+    response_validation_failed = False
 
-    while current.__cause__ is not None:
+    while True:
+        if isinstance(current, SchemaError):
+            response_validation_failed = True
+
+        if current.__cause__ is None:
+            break
+
         current = current.__cause__
+
+    if response_validation_failed:
+        cause_name = type(current).__name__
+
+        return (
+            "ResponseValidationError"
+            f"[cause={cause_name}]"
+        )
 
     error_type = type(current).__name__
     status_code = getattr(

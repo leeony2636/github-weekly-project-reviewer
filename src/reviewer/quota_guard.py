@@ -158,9 +158,14 @@ class QuotaGuard:
                     usage.blocked_reason,
                 )
 
-            estimated_tokens = (
+            estimated_input_tokens = (
                 prompt_size
                 + budget.system_prompt_char_reserve
+                + 1
+            ) // 2
+
+            estimated_tokens = (
+                estimated_input_tokens
                 + budget.max_output_tokens
             )
 

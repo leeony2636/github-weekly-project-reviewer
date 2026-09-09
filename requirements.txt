@@ -1,4 +1,4 @@
-google-genai
-openai
-cohere
+google-genai==2.22.0
+openai==2.46.0
+cohere==7.1.1
 PyGithub

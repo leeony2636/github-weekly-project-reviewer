@@ -147,12 +147,24 @@ class ProviderTests(unittest.TestCase):
             "response_format"
         ]
         self.assertEqual(
-            response_format["type"],
+            response_format.type,
             "json_object",
         )
+
+        response_schema = (
+            response_format.json_schema
+        )
+        self.assertIsNotNone(response_schema)
+        assert response_schema is not None
+
         self.assertEqual(
-            response_format["schema"]["required"],
+            response_schema["required"],
             ["findings"],
+        )
+        self.assertFalse(
+            response_schema[
+                "additionalProperties"
+            ],
         )
         self.assertEqual(
             call_arguments["max_tokens"],
@@ -277,6 +289,21 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(
             config.response_mime_type,
             "application/json",
+        )
+        response_schema = (
+            config.response_json_schema
+        )
+        self.assertIsNotNone(response_schema)
+        assert response_schema is not None
+
+        self.assertEqual(
+            response_schema["required"],
+            ["findings"],
+        )
+        self.assertFalse(
+            response_schema[
+                "additionalProperties"
+            ],
         )
         self.assertEqual(
             config.thinking_config

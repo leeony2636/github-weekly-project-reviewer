@@ -4,7 +4,12 @@ from google.genai import types
 from reviewer.prompts.gemini_prompt import (
     GEMINI_SYSTEM_PROMPT,
 )
-from reviewer.schemas import Finding, parse_model_response
+
+from reviewer.schemas import (
+    Finding,
+    build_model_response_schema,
+    parse_model_response,
+)
 
 from . import ProviderError
 
@@ -56,9 +61,15 @@ class GeminiClient:
             )
 
         self.model = model
-        self.thinking_level = (
+        thinking_levels = {
+            "low": types.ThinkingLevel.LOW,
+            "medium": types.ThinkingLevel.MEDIUM,
+            "high": types.ThinkingLevel.HIGH,
+        }
+
+        self.thinking_level = thinking_levels[
             normalized_thinking_level
-        )
+        ]
         self.max_output_tokens = max_output_tokens
         self.max_findings = max_findings
         self.client = genai.Client(
@@ -90,6 +101,9 @@ class GeminiClient:
                         ),
                         response_mime_type=(
                             "application/json"
+                        ),
+                        response_json_schema=(
+                            build_model_response_schema()
                         ),
                     ),
                 )
