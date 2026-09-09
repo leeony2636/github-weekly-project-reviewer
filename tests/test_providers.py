@@ -143,21 +143,11 @@ class ProviderTests(unittest.TestCase):
             "system",
         )
 
-        response_format = call_arguments[
-            "response_format"
-        ]
         self.assertEqual(
-            response_format["type"],
-            "json_object",
-        )
-        self.assertEqual(
-            response_format["schema"]["required"],
-            ["findings"],
-        )
-        self.assertEqual(
-            response_format["schema"]
-            ["properties"]["findings"]["maxItems"],
-            5,
+            call_arguments["response_format"],
+            {
+                "type": "json_object",
+            },
         )
         self.assertEqual(
             call_arguments["max_tokens"],
