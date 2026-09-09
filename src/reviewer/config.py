@@ -70,6 +70,7 @@ class RuntimeConfig:
     provider_timeout_seconds: int
     max_findings_per_model: int
     max_output_tokens: int
+    gpt_max_output_tokens: int
     qwen_input_char_limit: int
     cloud_input_char_limit: int
 
@@ -166,6 +167,12 @@ class RuntimeConfig:
                 800,
                 minimum=100,
                 maximum=4096,
+            ),
+            gpt_max_output_tokens=_read_int(
+                "GPT_MAX_OUTPUT_TOKENS",
+                800,
+                minimum=100,
+                maximum=64_000,
             ),
             qwen_input_char_limit=_read_int(
                 "QWEN_INPUT_CHAR_LIMIT",
@@ -356,6 +363,9 @@ class RuntimeConfig:
                 self.max_findings_per_model
             ),
             "max_output_tokens": self.max_output_tokens,
+            "gpt_max_output_tokens": (
+                self.gpt_max_output_tokens
+            ),
             "qwen_input_char_limit": (
                 self.qwen_input_char_limit
             ),

@@ -1,7 +1,10 @@
 from typing import Any, cast
 
 import cohere
-from cohere.types import JsonObjectResponseFormatV2
+from cohere.types import (
+    JsonObjectResponseFormatV2,
+    Thinking,
+)
 
 from reviewer.prompts.gpt_prompt import GPT_SYSTEM_PROMPT
 from reviewer.schemas import (
@@ -56,6 +59,18 @@ class GPTClient:
         self.max_output_tokens = max_output_tokens
         self.max_findings = max_findings
 
+        if self.max_output_tokens >= 2_048:
+            self.thinking = Thinking(
+                type="enabled",
+                token_budget=min(
+                    4_096,
+                    self.max_output_tokens // 2,
+                ),
+            )
+        else:
+            self.thinking = Thinking(
+                type="disabled",
+            )
         # 기존 설정 인터페이스를 유지하기 위한 값이다.
         # 실제 호출은 Cohere SDK의 공식 기본 주소를 사용한다.
         self.base_url = base_url
@@ -87,6 +102,7 @@ class GPTClient:
                 ),
                 temperature=0.1,
                 max_tokens=self.max_output_tokens,
+                thinking=self.thinking,
                 response_format=(
                     JsonObjectResponseFormatV2(
                         type="json_object",

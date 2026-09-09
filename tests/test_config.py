@@ -75,6 +75,10 @@ class ConfigTests(unittest.TestCase):
             800,
         )
         self.assertEqual(
+            config.gpt_max_output_tokens,
+            800,
+        )
+        self.assertEqual(
             config.gemini_thinking_level,
             "low",
         )

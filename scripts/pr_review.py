@@ -111,6 +111,13 @@ def create_orchestrator(
             800,
         )
     )
+    gpt_max_output_tokens = int(
+        get_config_value(
+            config,
+            "gpt_max_output_tokens",
+            max_output_tokens,
+        )
+    )
     max_findings = int(
         get_config_value(
             config,
@@ -141,7 +148,9 @@ def create_orchestrator(
             timeout_seconds=(
                 config.provider_timeout_seconds
             ),
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=(
+                gpt_max_output_tokens
+            ),
             max_findings=max_findings,
         ),
         GPTClient(
@@ -182,6 +191,9 @@ def create_orchestrator(
                 max_input_chars=(
                     qwen_input_char_limit
                 ),
+                max_output_tokens=(
+                    max_output_tokens
+                ),
             ),
             "gpt": ProviderBudget(
                 max_calls=int(
@@ -194,6 +206,13 @@ def create_orchestrator(
                 max_input_chars=(
                     cloud_input_char_limit
                 ),
+                max_output_tokens=(
+                    gpt_max_output_tokens
+                ),
+                max_estimated_tokens_per_call=(
+                    gpt_max_output_tokens
+                    + 4_096
+                ),
             ),
             "gemini": ProviderBudget(
                 max_calls=int(
@@ -205,6 +224,9 @@ def create_orchestrator(
                 ),
                 max_input_chars=(
                     cloud_input_char_limit
+                ),
+                max_output_tokens=(
+                    max_output_tokens
                 ),
             ),
         }

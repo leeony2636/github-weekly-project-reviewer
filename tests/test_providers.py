@@ -110,6 +110,7 @@ class ProviderTests(unittest.TestCase):
 
         provider = GPTClient(
             api_key="test-cohere-key",
+            max_output_tokens=8_192,
         )
         findings = provider.review("PR Diff")
 
@@ -168,7 +169,15 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(
             call_arguments["max_tokens"],
-            800,
+            8_192,
+        )
+        self.assertEqual(
+            call_arguments["thinking"].type,
+            "enabled",
+        )
+        self.assertEqual(
+            call_arguments["thinking"].token_budget,
+            4_096,
         )
 
 
