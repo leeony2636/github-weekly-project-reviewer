@@ -161,7 +161,6 @@ jobs:
           echo "Waiting for Langfuse..."
 
           for i in $(seq 1 40); do
-
             HTTP_CODE=$(curl \
               -s \
               -o /dev/null \
@@ -224,9 +223,7 @@ jobs:
           PYTHONPATH: src
 
           LANGFUSE_PUBLIC_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
-
           LANGFUSE_SECRET_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_SECRET_KEY || '' }}
-
           LANGFUSE_BASE_URL: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_BASE_URL || '' }}
 
         run: |
@@ -237,9 +234,9 @@ jobs:
           ARGS+=(--days "${LOOKBACK_DAYS}")
 
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            ARGS+=(--publish-issue)
+            ARGS+=(--publish)
           elif [ "${{ github.event.inputs.publish_issue }}" = "true" ]; then
-            ARGS+=(--publish-issue)
+            ARGS+=(--publish)
           fi
 
           echo "Run arguments:"
