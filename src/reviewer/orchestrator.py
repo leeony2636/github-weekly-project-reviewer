@@ -144,6 +144,11 @@ class ReviewRun:
         str,
         dict[str, object],
     ] = field(default_factory=dict)
+        # 각 모델의 1차 의견 보존
+    raw_findings: tuple[Finding, ...] = ()
+
+    # 모델 간 교차검증 결과 보존
+    cross_review_votes: tuple[CrossReviewVote, ...] = ()
 
 
 class ReviewOrchestrator:
@@ -725,3 +730,8 @@ class ReviewOrchestrator:
                 self.quota_guard.snapshot()
             ),
         )
+            # 모델별 1차 의견 보존
+        raw_findings=tuple(raw_findings),
+
+        # 모델 간 교차검증 결과 보존
+        cross_review_votes=tuple(cross_review_votes),

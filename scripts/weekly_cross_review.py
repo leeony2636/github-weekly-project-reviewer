@@ -193,6 +193,125 @@ def _finding_markdown(
 
     return "\n\n".join(sections)
 
+def _raw_findings_markdown(
+    result: ReviewRun,
+) -> str:
+    """각 모델의 1차 의견을 짧게 표시한다."""
+
+    if not result.raw_findings:
+        return "- 모델별 1차 의견이 없습니다."
+
+    sections: list[str] = []
+
+    # provider별로 묶기
+    for provider in ("qwen", "gpt", "gemini"):
+        provider_findings = [
+            finding
+            for finding in result.raw_findings
+            if finding.provider == provider
+        ]
+
+        sections.append(
+            f"### {provider.upper()}"
+        )
+
+        if not provider_findings:
+            sections.append(
+                "- 별도 지적 없음"
+            )
+            sections.append("")
+            continue
+
+        # 출력이 너무 길어지지 않도록 최대 3건만 표시
+        for finding in provider_findings[:3]:
+            sections.append(
+                (
+                    f"- [{finding.severity}] "
+                    f"`{finding.file}:{finding.line}` "
+                    f"{_single_line(finding.message)}"
+                )
+            )
+            sections.append(
+                (
+                    f"  - 이유: "
+                    f"{_single_line(finding.reason)}"
+                )
+            )
+
+        sections.append("")
+
+    return "\n".join(sections)
+
+def _cross_review_markdown(
+    result: ReviewRun,
+) -> str:
+    """모델 간 교차검증 결과를 짧게 표시한다."""
+
+    if not result.cross_review_votes:
+        return "- 교차검증 의견이 없습니다."
+
+    lines: list[str] = []
+
+    # 너무 길어지지 않도록 최대 9개까지만 표시
+    for vote in result.cross_review_votes[:9]:
+        lines.append(
+            (
+                f"- {vote.provider.upper()} "
+                f"→ `{vote.candidate_id}` "
+                f": **{vote.decision}** "
+                f"(신뢰도 {vote.confidence:.2f})"
+            )
+        )
+
+        lines.append(
+            f"  - 이유: {_single_line(vote.reason)}"
+        )
+
+    return "\n".join(lines)
+
+def _final_summary_markdown(
+    result: ReviewRun,
+) -> str:
+    """모델별 의견과 교차검증 결과를 간단히 종합한다."""
+
+    lines: list[str] = []
+
+    raw_count = len(result.raw_findings)
+    vote_count = len(result.cross_review_votes)
+    consensus_count = len(result.consensus_findings)
+
+    lines.append(
+        f"- 모델별 1차 지적: {raw_count}건"
+    )
+    lines.append(
+        f"- 교차검증 의견: {vote_count}건"
+    )
+    lines.append(
+        f"- 최종 합의 항목: {consensus_count}건"
+    )
+
+    if consensus_count > 0:
+        lines.append(
+            "- 결론: 두 모델 이상이 동의한 개선 항목이 있습니다."
+        )
+        lines.append(
+            "- 우선순위: 최종 합의 항목부터 확인하는 것이 좋습니다."
+        )
+    elif raw_count > 0:
+        lines.append(
+            "- 결론: 개별 모델의 지적은 있었지만 "
+            "최종 합의까지 이어진 항목은 없습니다."
+        )
+        lines.append(
+            "- 해석: 모델별 관점 차이가 있었으므로 "
+            "1차 의견과 교차검증 내용을 함께 확인하세요."
+        )
+    else:
+        lines.append(
+            "- 결론: 세 모델 모두 별도 문제를 제시하지 않았습니다."
+        )
+
+    return "\n".join(lines)
 
 def _selected_files_markdown(
     selection: ReviewSelection | None,
@@ -305,9 +424,21 @@ def make_issue_body(
 - 기준 커밋: `{review_input.base_sha or "없음"}`
 - 최종 커밋: `{review_input.head_sha or "없음"}`
 
+## 모델별 1차 의견
+
+{_raw_findings_markdown(result)}
+
+## 모델 간 교차검증
+
+{_cross_review_markdown(result)}
+
 ## 최종 교차검증 결과
 
 {_finding_markdown(result)}
+
+## 최종 종합 의견
+
+{_final_summary_markdown(result)}
 
 ## 모델별 검토 파일
 
