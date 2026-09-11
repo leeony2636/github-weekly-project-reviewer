@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -56,7 +56,8 @@ class WeeklyReviewInput:
     valid_lines: dict[str, frozenset[int]]
     changed_lines: dict[str, dict[int, str]]
     diff_sha256: str
-
+# 기존 테스트/호출 코드와의 호환성을 위해 기본값 제공
+    core_files: dict[str, str] = field(default_factory=dict)
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
@@ -99,6 +100,52 @@ class WeeklyGitHubService(GitHubService):
 
         self.max_commits = max_commits
         self.max_pull_requests = max_pull_requests
+
+    def _collect_core_files(
+        self,
+    ) -> dict[str, str]:
+        """주간 리뷰에 사용할 핵심 산출물만 가져온다."""
+
+        # AI가 항상 확인할 핵심 파일
+        core_paths = (
+            "main.py",
+            "README.md",
+        )
+
+        core_files: dict[str, str] = {}
+
+        for path in core_paths:
+            try:
+                # 저장소 기본 브랜치의 최신 파일 가져오기
+                item = self.repository.get_contents(
+                    path,
+                    ref=self.repository.default_branch,
+                )
+
+                # 폴더가 아니라 파일인지 확인
+                decoded_content = getattr(
+                    item,
+                    "decoded_content",
+                    None,
+                )
+
+                if decoded_content is None:
+                    continue
+
+                # GitHub에서 받은 bytes → 문자열 변환
+                content = decoded_content.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+
+                core_files[path] = content
+
+            except Exception:
+                # 핵심 파일 하나가 없더라도
+                # 전체 주간 리뷰 수집을 바로 중단하지 않음
+                continue
+
+        return core_files
 
     def _collect_commits(
         self,
@@ -311,6 +358,7 @@ class WeeklyGitHubService(GitHubService):
         commits: tuple[WeeklyCommit, ...],
         pull_requests: tuple[WeeklyPullRequest, ...],
         files: tuple[PullRequestFile, ...],
+        core_files: dict[str, str],
     ) -> None:
         locations = []
 
@@ -336,6 +384,15 @@ class WeeklyGitHubService(GitHubService):
             )
         )
 
+        # 핵심 산출물(main.py, README.md)도 민감정보 검사
+        for file_path, content in core_files.items():
+            locations.extend(
+                scan_text(
+                    file_path=file_path,
+                    content=content,
+                )
+            )
+        
         if locations:
             raise SensitiveContentError(locations)
 
@@ -378,6 +435,7 @@ class WeeklyGitHubService(GitHubService):
                 base_sha=base_sha,
                 head_sha=head_sha,
             )
+            core_files = self._collect_core_files()
         except (
             WeeklyCollectionLimitError,
             IncompletePullRequestDiff,
@@ -393,6 +451,7 @@ class WeeklyGitHubService(GitHubService):
             commits=commits,
             pull_requests=pull_requests,
             files=files,
+            core_files=core_files,
         )
 
         file_payloads = [
@@ -427,4 +486,5 @@ class WeeklyGitHubService(GitHubService):
             valid_lines=valid_lines,
             changed_lines=changed_lines,
             diff_sha256=calculate_diff_hash(files),
+            core_files=core_files,
         )

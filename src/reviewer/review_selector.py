@@ -263,6 +263,92 @@ def _build_selected_prompt(
 
     return prompt
 
+def _build_weekly_core_prompt(
+    review_input: WeeklyReviewInput,
+    *,
+    max_chars: int,
+) -> str:
+    """주간 리뷰에서는 핵심 산출물만 짧게 전달한다."""
+
+    # 1차 주간 리뷰가 전체 4800자를 다 쓰지 않도록 제한
+    weekly_limit = min(max_chars, 2_200)
+
+    # main.py는 실제 실행 진입점이므로 우선순위가 가장 높음
+    main_content = review_input.core_files.get(
+        "main.py",
+        "",
+    )
+
+    # README는 프로젝트 목적과 주요 기능 확인용
+    readme_content = review_input.core_files.get(
+        "README.md",
+        "",
+    )
+
+    # README는 상단 핵심 설명만 사용
+    readme_content = readme_content[:800]
+
+    payload = {
+        "task": (
+            "프로젝트의 현재 상태를 짧게 평가하세요. "
+            "세부 버그 전체를 찾지 말고, "
+            "목적과 구조의 큰 불일치, 주요 위험, "
+            "다음 개선 우선순위만 판단하세요."
+        ),
+
+        # 기존 주간 리뷰 메타정보 유지
+        "weekly_review": {
+            "repository": review_input.repository,
+            "since": review_input.since.isoformat(),
+            "until": review_input.until.isoformat(),
+            "base_sha": review_input.base_sha,
+            "head_sha": review_input.head_sha,
+            "diff_sha256": review_input.diff_sha256,
+            "commit_count": len(review_input.commits),
+            "pull_request_count": len(
+                review_input.pull_requests
+            ),
+        },
+
+        # 실제 모델이 집중해서 볼 핵심 산출물
+        "core_files": {
+            "main.py": main_content,
+            "README.md": readme_content,
+        },
+    }
+
+    prompt = json.dumps(
+        payload,
+        ensure_ascii=False,
+    )
+
+    # main.py까지 포함했을 때 제한을 넘으면
+    # main.py도 마지막 부분만 잘라서 맞춤
+    if len(prompt) > weekly_limit:
+        overflow = len(prompt) - weekly_limit
+
+        keep_length = max(
+            500,
+            len(main_content) - overflow - 50,
+        )
+
+        payload["core_files"]["main.py"] = (
+            main_content[:keep_length]
+        )
+
+        prompt = json.dumps(
+            payload,
+            ensure_ascii=False,
+        )
+
+    # 그래도 제한을 넘는 경우에만 중단
+    if len(prompt) > weekly_limit:
+        raise ReviewSelectionError(
+            "주간 핵심 리뷰 입력을 "
+            f"{weekly_limit}자 이하로 만들 수 없습니다."
+        )
+
+    return prompt
 
 def _merge_unique_files(
     *groups: list[PullRequestFile],
@@ -309,6 +395,39 @@ def select_review_inputs(
         raise ReviewSelectionError(
             "cloud_input_char_limit는 "
             "2000 이상이어야 합니다."
+        )
+
+    # 주간 리뷰는 최근 Diff 전체 대신
+    # main.py + README.md 핵심 산출물만 검토한다.
+    if isinstance(review_input, WeeklyReviewInput):
+        common_input_char_limit = min(
+            qwen_input_char_limit,
+            cloud_input_char_limit,
+        )
+
+        common_prompt = _build_weekly_core_prompt(
+            review_input,
+            max_chars=common_input_char_limit,
+        )
+
+        # 실제로 수집된 핵심 파일명만 기록
+        core_file_names = tuple(
+            filename
+            for filename in ("main.py", "README.md")
+            if filename in review_input.core_files
+        )
+
+        return ReviewSelection(
+            provider_prompts={
+                "qwen": common_prompt,
+                "gpt": common_prompt,
+                "gemini": common_prompt,
+            },
+            selected_files={
+                "qwen": core_file_names,
+                "gpt": core_file_names,
+                "gemini": core_file_names,
+            },
         )
 
     code_risk_files = _select_files(
