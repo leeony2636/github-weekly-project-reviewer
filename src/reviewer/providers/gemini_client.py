@@ -1,6 +1,9 @@
+from typing import Sequence
+
 from google import genai
 from google.genai import types
-from typing import Sequence
+
+from reviewer.langfuse_observer import generation_context
 from reviewer.prompts.gemini_prompt import (
     GEMINI_SYSTEM_PROMPT,
 )
@@ -66,6 +69,7 @@ class GeminiClient:
             )
 
         self.model = model
+
         thinking_levels = {
             "low": types.ThinkingLevel.LOW,
             "medium": types.ThinkingLevel.MEDIUM,
@@ -77,6 +81,7 @@ class GeminiClient:
         ]
         self.max_output_tokens = max_output_tokens
         self.max_findings = max_findings
+
         self.client = genai.Client(
             api_key=api_key,
         )
@@ -86,36 +91,99 @@ class GeminiClient:
         user_prompt: str,
     ) -> list[Finding]:
         try:
-            response = (
-                self.client.models.generate_content(
-                    model=self.model,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=(
-                            GEMINI_SYSTEM_PROMPT
+            # 프롬프트 전문 대신 문자 수만 Langfuse에 기록한다.
+            with generation_context(
+                name="gemini-review",
+                model=self.model,
+                input_data={
+                    "prompt_chars": len(user_prompt),
+                },
+                metadata={
+                    "provider": self.provider,
+                    "task": "review",
+                },
+            ) as generation:
+                response = (
+                    self.client.models.generate_content(
+                        model=self.model,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=(
+                                GEMINI_SYSTEM_PROMPT
+                            ),
+                            thinking_config=(
+                                types.ThinkingConfig(
+                                    thinking_level=(
+                                        self.thinking_level
+                                    ),
+                                )
+                            ),
+                            max_output_tokens=(
+                                self.max_output_tokens
+                            ),
+                            response_mime_type=(
+                                "application/json"
+                            ),
+                            response_json_schema=(
+                                build_model_response_schema()
+                            ),
                         ),
-                        thinking_config=(
-                            types.ThinkingConfig(
-                                thinking_level=(
-                                    self.thinking_level
-                                ),
-                            )
-                        ),
-                        max_output_tokens=(
-                            self.max_output_tokens
-                        ),
-                        response_mime_type=(
-                            "application/json"
-                        ),
-                        response_json_schema=(
-                            build_model_response_schema()
-                        ),
-                    ),
+                    )
                 )
-            )
+
+                content = response.text or ""
+
+                if generation is not None:
+                    usage = getattr(
+                        response,
+                        "usage_metadata",
+                        None,
+                    )
+
+                    input_tokens = (
+                        getattr(
+                            usage,
+                            "prompt_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    candidate_tokens = (
+                        getattr(
+                            usage,
+                            "candidates_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    thoughts_tokens = (
+                        getattr(
+                            usage,
+                            "thoughts_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    output_tokens = (
+                        candidate_tokens
+                        + thoughts_tokens
+                    )
+
+                    generation.update(
+                        output={
+                            "response_chars": len(content),
+                        },
+                        usage_details={
+                            "input": input_tokens,
+                            "output": output_tokens,
+                        },
+                    )
 
             return parse_model_response(
-                response.text or "",
+                content,
                 provider=self.provider,
                 max_findings=self.max_findings,
             )
@@ -142,37 +210,99 @@ class GeminiClient:
             )
 
         try:
-            response = (
-                self.client.models.generate_content(
-                    model=self.model,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=(
-                            CROSS_REVIEW_SYSTEM_PROMPT
+            # Gemini 교차평가도 별도 generation으로 기록한다.
+            with generation_context(
+                name="gemini-cross-review",
+                model=self.model,
+                input_data={
+                    "prompt_chars": len(user_prompt),
+                    "candidate_count": len(candidate_ids),
+                },
+                metadata={
+                    "provider": self.provider,
+                    "task": "cross_review",
+                },
+            ) as generation:
+                response = (
+                    self.client.models.generate_content(
+                        model=self.model,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=(
+                                CROSS_REVIEW_SYSTEM_PROMPT
+                            ),
+                            thinking_config=(
+                                types.ThinkingConfig(
+                                    thinking_level=(
+                                        self.thinking_level
+                                    ),
+                                )
+                            ),
+                            max_output_tokens=(
+                                self.max_output_tokens
+                            ),
+                            response_mime_type=(
+                                "application/json"
+                            ),
+                            response_json_schema=(
+                                build_cross_review_response_schema(
+                                    candidate_ids
+                                )
+                            ),
                         ),
-                        thinking_config=(
-                            types.ThinkingConfig(
-                                thinking_level=(
-                                    self.thinking_level
-                                ),
-                            )
-                        ),
-                        max_output_tokens=(
-                            self.max_output_tokens
-                        ),
-                        response_mime_type=(
-                            "application/json"
-                        ),
-                        response_json_schema=(
-                            build_cross_review_response_schema(
-                                candidate_ids
-                            )
-                        ),
-                    ),
+                    )
                 )
-            )
 
-            content = response.text or ""
+                content = response.text or ""
+
+                if generation is not None:
+                    usage = getattr(
+                        response,
+                        "usage_metadata",
+                        None,
+                    )
+
+                    input_tokens = (
+                        getattr(
+                            usage,
+                            "prompt_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    candidate_tokens = (
+                        getattr(
+                            usage,
+                            "candidates_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    thoughts_tokens = (
+                        getattr(
+                            usage,
+                            "thoughts_token_count",
+                            0,
+                        )
+                        or 0
+                    )
+
+                    output_tokens = (
+                        candidate_tokens
+                        + thoughts_tokens
+                    )
+
+                    generation.update(
+                        output={
+                            "response_chars": len(content),
+                        },
+                        usage_details={
+                            "input": input_tokens,
+                            "output": output_tokens,
+                        },
+                    )
 
             return parse_cross_review_response(
                 content,

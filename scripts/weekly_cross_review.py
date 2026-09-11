@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
-
+from reviewer.langfuse_observer import flush_langfuse
 from reviewer.config import ConfigError, RuntimeConfig
 from reviewer.github_service import (
     GitHubServiceError,
@@ -1208,14 +1208,18 @@ def main(
         "review_trace.db",
     )
 
-    with TraceStore(database_path) as trace_store:
-        return run_weekly_review(
-            config=config,
-            trace_store=trace_store,
-            until=until,
-            days=args.days,
-            publish=args.publish,
-        )
+    try:
+        with TraceStore(database_path) as trace_store:
+            return run_weekly_review(
+                config=config,
+                trace_store=trace_store,
+                until=until,
+                days=args.days,
+                publish=args.publish,
+            )
+    finally:
+        # 성공/실패와 관계없이 남은 Langfuse 기록 전송
+        flush_langfuse()
 
 
 if __name__ == "__main__":

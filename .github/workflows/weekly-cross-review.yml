@@ -28,6 +28,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 concurrency:
   group: weekly-cross-review-${{ vars.TARGET_REPO || github.repository }}
@@ -37,7 +38,7 @@ jobs:
   weekly-review:
     name: Weekly three-model review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     env:
       PYTHONPATH: ${{ github.workspace }}/src
@@ -89,11 +90,93 @@ jobs:
       PUBLISH_ISSUE: ${{ github.event_name == 'schedule' || inputs.publish_issue }}
       LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
 
+      GCP_PROJECT_ID: storm-wall-508003-s8
+      GCP_ZONE: asia-northeast3-a
+      GCP_VM_NAME: langfuse-reviewer
+
     steps:
       - name: Checkout reviewer repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Start Langfuse VM
+        shell: bash
+        run: |
+          set -e
+
+          STATUS="$(
+            gcloud compute instances describe "${GCP_VM_NAME}" \
+              --project="${GCP_PROJECT_ID}" \
+              --zone="${GCP_ZONE}" \
+              --format="value(status)"
+          )"
+
+          echo "Current VM status: ${STATUS}"
+
+          if [ "${STATUS}" != "RUNNING" ]; then
+            gcloud compute instances start "${GCP_VM_NAME}" \
+              --project="${GCP_PROJECT_ID}" \
+              --zone="${GCP_ZONE}"
+          fi
+
+      - name: Start IAP tunnel and wait for Langfuse
+        id: langfuse
+        shell: bash
+        run: |
+          set +e
+
+          nohup gcloud compute start-iap-tunnel \
+            "${GCP_VM_NAME}" \
+            3000 \
+            --project="${GCP_PROJECT_ID}" \
+            --zone="${GCP_ZONE}" \
+            --local-host-port=127.0.0.1:3000 \
+            >/tmp/langfuse-iap.log 2>&1 &
+
+          echo $! >/tmp/langfuse-iap.pid
+
+          READY="false"
+
+          for attempt in $(seq 1 40); do
+            HTTP_CODE="$(
+              curl \
+                --silent \
+                --output /dev/null \
+                --write-out "%{http_code}" \
+                --max-time 3 \
+                http://127.0.0.1:3000 \
+                || true
+            )"
+
+            echo "Langfuse check ${attempt}/40: ${HTTP_CODE}"
+
+            if [ "${HTTP_CODE}" = "200" ]; then
+              READY="true"
+              break
+            fi
+
+            sleep 5
+          done
+
+          echo "ready=${READY}" >> "${GITHUB_OUTPUT}"
+
+          if [ "${READY}" != "true" ]; then
+            echo "Langfuse is not ready."
+            echo "Reviewer will continue without Langfuse tracing."
+            cat /tmp/langfuse-iap.log || true
+          fi
+
+          exit 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -114,6 +197,10 @@ jobs:
 
       - name: Run weekly three-model review
         shell: bash
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
+          LANGFUSE_SECRET_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_SECRET_KEY || '' }}
+          LANGFUSE_BASE_URL: ${{ steps.langfuse.outputs.ready == 'true' && 'http://127.0.0.1:3000' || '' }}
         run: |
           arguments=(
             --days "${LOOKBACK_DAYS}"
@@ -140,6 +227,7 @@ jobs:
               payload = json.load(file)
 
           issue = payload.get("issue", {})
+
           safe_summary = {
               "review_type": payload.get("review_type"),
               "status": payload.get("status", "completed"),
@@ -166,10 +254,25 @@ jobs:
                   "consensus_count",
                   0,
               ),
-              "published": issue.get("published", False),
+              "published": issue.get(
+                  "published",
+                  False,
+              ),
           }
+
           print(safe_summary)
           PY
           else
             echo "Weekly review result was not created."
           fi
+
+      - name: Stop Langfuse VM
+        if: always()
+        shell: bash
+        run: |
+          echo "Stopping Langfuse VM..."
+
+          gcloud compute instances stop "${GCP_VM_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --zone="${GCP_ZONE}" \
+            || true
