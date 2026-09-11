@@ -42,6 +42,11 @@ jobs:
 
     env:
       # --------------------------------------------------
+      # Python src layout
+      # --------------------------------------------------
+      PYTHONPATH: src
+
+      # --------------------------------------------------
       # Target repository
       # --------------------------------------------------
       TARGET_REPO: ${{ vars.TARGET_REPO || github.repository }}
@@ -143,14 +148,10 @@ jobs:
 
       # ==================================================
       # 4. Wait for Langfuse
-      #
-      # Direct connection:
-      # GitHub Actions -> 34.47.112.195:3000 -> Langfuse
       # ==================================================
       - name: Wait for Langfuse
         id: langfuse
         shell: bash
-
         env:
           LANGFUSE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
 
@@ -203,10 +204,12 @@ jobs:
 
 
       # ==================================================
-      # 6. Tests
+      # 6. Unit tests
       # ==================================================
       - name: Run unit tests
         shell: bash
+        env:
+          PYTHONPATH: src
         run: |
           python -m pytest -q
 
@@ -218,6 +221,8 @@ jobs:
         shell: bash
 
         env:
+          PYTHONPATH: src
+
           LANGFUSE_PUBLIC_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
 
           LANGFUSE_SECRET_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_SECRET_KEY || '' }}
