@@ -2,219 +2,254 @@ name: Weekly Three-Model Review
 
 on:
   schedule:
-    # 매주 월요일 오전 9시(한국 시간)
     - cron: "0 0 * * 1"
 
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "검토할 최근 일수"
-        required: true
+        description: "Lookback days"
+        required: false
         default: "7"
-        type: string
 
       publish_issue:
-        description: "검토 결과를 GitHub Issue로 생성"
-        required: true
-        default: false
+        description: "Publish GitHub Issue"
+        required: false
         type: boolean
+        default: false
 
       upload_artifacts:
-        description: "JSON 결과와 SQLite 기록 업로드"
-        required: true
-        default: false
+        description: "Upload artifacts"
+        required: false
         type: boolean
+        default: false
+
 
 permissions:
   contents: read
   issues: write
   id-token: write
 
+
 concurrency:
   group: weekly-cross-review-${{ vars.TARGET_REPO || github.repository }}
   cancel-in-progress: false
 
+
 jobs:
   weekly-review:
-    name: Weekly three-model review
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     env:
-      PYTHONPATH: ${{ github.workspace }}/src
-      PYTHONDONTWRITEBYTECODE: "1"
-      PIP_NO_CACHE_DIR: "1"
-
+      # --------------------------------------------------
+      # Target repository
+      # --------------------------------------------------
       TARGET_REPO: ${{ vars.TARGET_REPO || github.repository }}
-      TARGET_GITHUB_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN || github.token }}
 
+      # --------------------------------------------------
+      # Provider API Keys
+      # --------------------------------------------------
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
+      # --------------------------------------------------
+      # Qwen
+      # --------------------------------------------------
       QWEN_MODEL: Qwen/Qwen2.5-Coder-3B-Instruct
-      QWEN_BASE_URL: https://router.huggingface.co/featherless-ai/v1
+      QWEN_BASE_URL: https://router.huggingface.co/hf-inference/v1
 
+      # --------------------------------------------------
+      # Command A / Cohere
+      # --------------------------------------------------
       GPT_MODEL: command-a-plus-05-2026
       GPT_BASE_URL: https://api.cohere.ai/compatibility/v1
 
+      # --------------------------------------------------
+      # Gemini
+      # --------------------------------------------------
       GEMINI_MODEL: gemini-3.8-flash
       GEMINI_THINKING_LEVEL: low
 
+      # --------------------------------------------------
+      # Runtime
+      # --------------------------------------------------
       PROVIDER_TIMEOUT_SECONDS: "90"
-      MAX_FINDINGS_PER_MODEL: "5"
       MAX_OUTPUT_TOKENS: "4096"
       GPT_MAX_OUTPUT_TOKENS: "8192"
 
-      QWEN_INPUT_CHAR_LIMIT: "4800"
-      CLOUD_INPUT_CHAR_LIMIT: "4800"
+      # --------------------------------------------------
+      # GitHub
+      # --------------------------------------------------
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      GPT_REVIEW_PERCENT: "20"
-      GEMINI_REVIEW_PERCENT: "10"
-
-      MAX_QWEN_CALLS_PER_RUN: "5"
-      MAX_GPT_CALLS_PER_RUN: "5"
-      MAX_GEMINI_CALLS_PER_RUN: "6"
-
-      LINE_TOLERANCE: "1"
-      MIN_MATCH_COUNT: "2"
-      MIN_SUCCESSFUL_PROVIDERS: "3"
-
-      FREE_ONLY_MODE: "true"
-      CACHE_ENABLED: "true"
-      DEGRADED_MODE_ON_QUOTA: "true"
-
-      REVIEW_DB_PATH: weekly_review_trace.db
-      WEEKLY_REVIEW_OUTPUT_PATH: weekly_review_result.json
-
-      PUBLISH_ISSUE: ${{ github.event_name == 'schedule' || inputs.publish_issue }}
-      LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
-
+      # --------------------------------------------------
+      # GCP
+      # --------------------------------------------------
       GCP_PROJECT_ID: storm-wall-508003-s8
       GCP_ZONE: asia-northeast3-a
       GCP_VM_NAME: langfuse-reviewer
 
+
     steps:
+      # ==================================================
+      # 1. Checkout
+      # ==================================================
       - name: Checkout reviewer repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
+
+      # ==================================================
+      # 2. Google Cloud authentication
+      # ==================================================
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Set up Google Cloud CLI
+
+      - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
+
+      # ==================================================
+      # 3. Start Langfuse VM
+      # ==================================================
       - name: Start Langfuse VM
         shell: bash
         run: |
           set -e
 
-          STATUS="$(
-            gcloud compute instances describe "${GCP_VM_NAME}" \
-              --project="${GCP_PROJECT_ID}" \
-              --zone="${GCP_ZONE}" \
-              --format="value(status)"
-          )"
+          STATUS=$(gcloud compute instances describe "${GCP_VM_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --zone="${GCP_ZONE}" \
+            --format="value(status)")
 
           echo "Current VM status: ${STATUS}"
 
           if [ "${STATUS}" != "RUNNING" ]; then
+            echo "Starting Langfuse VM..."
+
             gcloud compute instances start "${GCP_VM_NAME}" \
               --project="${GCP_PROJECT_ID}" \
               --zone="${GCP_ZONE}"
+
+            echo "VM start command completed."
+          else
+            echo "Langfuse VM is already running."
           fi
 
-      - name: Start IAP tunnel and wait for Langfuse
+
+      # ==================================================
+      # 4. Wait for Langfuse
+      #
+      # Direct connection:
+      # GitHub Actions -> 34.47.112.195:3000 -> Langfuse
+      # ==================================================
+      - name: Wait for Langfuse
         id: langfuse
         shell: bash
+
+        env:
+          LANGFUSE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+
         run: |
           set +e
 
-          nohup gcloud compute start-iap-tunnel \
-            "${GCP_VM_NAME}" \
-            3000 \
-            --project="${GCP_PROJECT_ID}" \
-            --zone="${GCP_ZONE}" \
-            --local-host-port=127.0.0.1:3000 \
-            >/tmp/langfuse-iap.log 2>&1 &
+          echo "Waiting for Langfuse..."
 
-          echo $! >/tmp/langfuse-iap.pid
+          for i in $(seq 1 40); do
 
-          READY="false"
+            HTTP_CODE=$(curl \
+              -s \
+              -o /dev/null \
+              -w "%{http_code}" \
+              --max-time 5 \
+              "${LANGFUSE_URL}")
 
-          for attempt in $(seq 1 40); do
-            HTTP_CODE="$(
-              curl \
-                --silent \
-                --output /dev/null \
-                --write-out "%{http_code}" \
-                --max-time 3 \
-                http://127.0.0.1:3000 \
-                || true
-            )"
-
-            echo "Langfuse check ${attempt}/40: ${HTTP_CODE}"
+            echo "Attempt ${i}/40 - HTTP ${HTTP_CODE}"
 
             if [ "${HTTP_CODE}" = "200" ]; then
-              READY="true"
-              break
+              echo "Langfuse is ready."
+              echo "ready=true" >> "${GITHUB_OUTPUT}"
+              exit 0
             fi
 
             sleep 5
           done
 
-          echo "ready=${READY}" >> "${GITHUB_OUTPUT}"
-
-          if [ "${READY}" != "true" ]; then
-            echo "Langfuse is not ready."
-            echo "Reviewer will continue without Langfuse tracing."
-            cat /tmp/langfuse-iap.log || true
-          fi
+          echo "Langfuse unavailable."
+          echo "Reviewer will continue without Langfuse tracing."
+          echo "ready=false" >> "${GITHUB_OUTPUT}"
 
           exit 0
 
+
+      # ==================================================
+      # 5. Python
+      # ==================================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          pip install -r requirements.txt
 
+
+      # ==================================================
+      # 6. Tests
+      # ==================================================
       - name: Run unit tests
+        shell: bash
         run: |
-          python -m unittest discover \
-            -s tests \
-            -p "test_*.py" \
-            -v
+          python -m pytest -q
 
+
+      # ==================================================
+      # 7. Weekly Three-Model Review
+      # ==================================================
       - name: Run weekly three-model review
         shell: bash
+
         env:
           LANGFUSE_PUBLIC_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
-          LANGFUSE_SECRET_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_SECRET_KEY || '' }}
-          LANGFUSE_BASE_URL: ${{ steps.langfuse.outputs.ready == 'true' && 'http://127.0.0.1:3000' || '' }}
-        run: |
-          arguments=(
-            --days "${LOOKBACK_DAYS}"
-          )
 
-          if [ "${PUBLISH_ISSUE}" = "true" ]; then
-            arguments+=(--publish)
+          LANGFUSE_SECRET_KEY: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_SECRET_KEY || '' }}
+
+          LANGFUSE_BASE_URL: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_BASE_URL || '' }}
+
+        run: |
+          ARGS=()
+
+          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
+
+          ARGS+=(--days "${LOOKBACK_DAYS}")
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS+=(--publish-issue)
+          elif [ "${{ github.event.inputs.publish_issue }}" = "true" ]; then
+            ARGS+=(--publish-issue)
           fi
 
-          python -m scripts.weekly_cross_review \
-            "${arguments[@]}"
+          echo "Run arguments:"
+          printf ' %q' "${ARGS[@]}"
+          echo
 
+          python -m scripts.weekly_cross_review "${ARGS[@]}"
+
+
+      # ==================================================
+      # 8. Safe result summary
+      # ==================================================
       - name: Show safe result summary
         if: always()
+        shell: bash
         run: |
           if [ -f weekly_review_result.json ]; then
             python - <<'PY'
@@ -222,50 +257,35 @@ jobs:
 
           with open(
               "weekly_review_result.json",
-              encoding="utf-8",
-          ) as file:
-              payload = json.load(file)
-
-          issue = payload.get("issue", {})
+              "r",
+              encoding="utf-8"
+          ) as f:
+              data = json.load(f)
 
           safe_summary = {
-              "review_type": payload.get("review_type"),
-              "status": payload.get("status", "completed"),
-              "repository": payload.get("repository"),
-              "error_type": payload.get("error_type"),
-              "commit_count": payload.get("commit_count", 0),
-              "pull_request_count": payload.get(
-                  "pull_request_count",
-                  0,
-              ),
-              "changed_file_count": payload.get(
-                  "changed_file_count",
-                  0,
-              ),
-              "successful_providers": payload.get(
-                  "successful_providers",
-                  [],
-              ),
-              "provider_failures": payload.get(
-                  "provider_failures",
-                  {},
-              ),
-              "consensus_count": payload.get(
-                  "consensus_count",
-                  0,
-              ),
-              "published": issue.get(
-                  "published",
-                  False,
-              ),
+              "review_type": data.get("review_type"),
+              "status": data.get("status"),
+              "repository": data.get("repository"),
+              "error_type": data.get("error_type"),
+              "commit_count": data.get("commit_count"),
+              "pull_request_count": data.get("pull_request_count"),
+              "changed_file_count": data.get("changed_file_count"),
+              "successful_providers": data.get("successful_providers"),
+              "provider_failures": data.get("provider_failures"),
+              "consensus_count": data.get("consensus_count"),
+              "published": data.get("published"),
           }
 
           print(safe_summary)
           PY
           else
-            echo "Weekly review result was not created."
+            echo "weekly_review_result.json not found."
           fi
 
+
+      # ==================================================
+      # 9. Stop Langfuse VM
+      # ==================================================
       - name: Stop Langfuse VM
         if: always()
         shell: bash
@@ -276,3 +296,5 @@ jobs:
             --project="${GCP_PROJECT_ID}" \
             --zone="${GCP_ZONE}" \
             || true
+
+          echo "Langfuse VM stop step completed."
