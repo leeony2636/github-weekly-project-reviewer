@@ -42,7 +42,7 @@ jobs:
 
     env:
       # --------------------------------------------------
-      # Python src layout
+      # Python
       # --------------------------------------------------
       PYTHONPATH: src
 
@@ -140,7 +140,7 @@ jobs:
               --project="${GCP_PROJECT_ID}" \
               --zone="${GCP_ZONE}"
 
-            echo "VM start command completed."
+            echo "Langfuse VM start command completed."
           else
             echo "Langfuse VM is already running."
           fi
@@ -152,6 +152,7 @@ jobs:
       - name: Wait for Langfuse
         id: langfuse
         shell: bash
+
         env:
           LANGFUSE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
 
@@ -180,7 +181,7 @@ jobs:
           done
 
           echo "Langfuse unavailable."
-          echo "Reviewer will continue without Langfuse tracing."
+          echo "Reviewer will continue without tracing."
           echo "ready=false" >> "${GITHUB_OUTPUT}"
 
           exit 0
@@ -207,8 +208,10 @@ jobs:
       # ==================================================
       - name: Run unit tests
         shell: bash
+
         env:
           PYTHONPATH: src
+
         run: |
           python -m pytest -q
 
@@ -247,11 +250,25 @@ jobs:
 
 
       # ==================================================
-      # 8. Safe result summary
+      # 8. Give Langfuse time to finish exporting traces
+      # ==================================================
+      - name: Finish Langfuse trace export
+        if: ${{ always() && steps.langfuse.outputs.ready == 'true' }}
+        shell: bash
+
+        run: |
+          echo "Waiting for Langfuse trace export to finish..."
+          sleep 30
+          echo "Langfuse export grace period completed."
+
+
+      # ==================================================
+      # 9. Safe result summary
       # ==================================================
       - name: Show safe result summary
         if: always()
         shell: bash
+
         run: |
           if [ -f weekly_review_result.json ]; then
             python - <<'PY'
@@ -286,11 +303,12 @@ jobs:
 
 
       # ==================================================
-      # 9. Stop Langfuse VM
+      # 10. Stop Langfuse VM
       # ==================================================
       - name: Stop Langfuse VM
         if: always()
         shell: bash
+
         run: |
           echo "Stopping Langfuse VM..."
 
