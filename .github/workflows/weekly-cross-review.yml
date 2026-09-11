@@ -62,7 +62,7 @@ jobs:
       # Qwen
       # --------------------------------------------------
       QWEN_MODEL: Qwen/Qwen2.5-Coder-3B-Instruct
-      QWEN_BASE_URL: https://router.huggingface.co/hf-inference/v1
+      QWEN_BASE_URL: https://router.huggingface.co/featherless-ai/v1
 
       # --------------------------------------------------
       # Command A / Cohere
