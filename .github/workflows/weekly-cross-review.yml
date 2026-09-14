@@ -2,7 +2,7 @@ name: Weekly Three-Model Review
 
 on:
   schedule:
-    - cron: "50 0 * * 1"
+    - cron: "*/5 * * * 1"  # Runs every 5 minutes
 
   workflow_dispatch:
     inputs:
