@@ -123,6 +123,7 @@ jobs:
       # ==================================================
       - name: Start Langfuse VM
         shell: bash
+
         run: |
           set -e
 
@@ -136,59 +137,21 @@ jobs:
           if [ "${STATUS}" != "RUNNING" ]; then
             echo "Starting Langfuse VM..."
 
+            # VM이 완전히 켜질 때까지 여기서 기다리지 않는다.
+            # 뒤의 Python 설치/테스트와 VM 부팅을 동시에 진행한다.
             gcloud compute instances start "${GCP_VM_NAME}" \
               --project="${GCP_PROJECT_ID}" \
-              --zone="${GCP_ZONE}"
+              --zone="${GCP_ZONE}" \
+              --async
 
-            echo "Langfuse VM start command completed."
+            echo "Langfuse VM start request submitted."
           else
             echo "Langfuse VM is already running."
           fi
 
 
       # ==================================================
-      # 4. Wait for Langfuse
-      # ==================================================
-      - name: Wait for Langfuse
-        id: langfuse
-        shell: bash
-
-        env:
-          LANGFUSE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
-
-        run: |
-          set +e
-
-          echo "Waiting for Langfuse..."
-
-          for i in $(seq 1 40); do
-            HTTP_CODE=$(curl \
-              -s \
-              -o /dev/null \
-              -w "%{http_code}" \
-              --max-time 5 \
-              "${LANGFUSE_URL}")
-
-            echo "Attempt ${i}/40 - HTTP ${HTTP_CODE}"
-
-            if [ "${HTTP_CODE}" = "200" ]; then
-              echo "Langfuse is ready."
-              echo "ready=true" >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-
-            sleep 5
-          done
-
-          echo "Langfuse unavailable."
-          echo "Reviewer will continue without tracing."
-          echo "ready=false" >> "${GITHUB_OUTPUT}"
-
-          exit 0
-
-
-      # ==================================================
-      # 5. Python
+      # 4. Python
       # ==================================================
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -198,13 +161,14 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
 
       # ==================================================
-      # 6. Unit tests
+      # 5. Unit tests
       # ==================================================
       - name: Run unit tests
         shell: bash
@@ -217,9 +181,64 @@ jobs:
 
 
       # ==================================================
+      # 6. Wait for Langfuse
+      # ==================================================
+      - name: Wait for Langfuse
+        id: langfuse
+        shell: bash
+
+        env:
+          LANGFUSE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+
+        run: |
+          set -e
+
+          echo "Waiting for Langfuse..."
+
+          # 최대 3분까지만 기다린다.
+          DEADLINE=$((SECONDS + 180))
+          ATTEMPT=0
+
+          while (( SECONDS < DEADLINE )); do
+            ATTEMPT=$((ATTEMPT + 1))
+
+            # 기존:
+            # curl 최대 5초 + sleep 5초
+            #
+            # 수정:
+            # 연결 최대 1초 / 전체 최대 2초 / sleep 1초
+            HTTP_CODE=$(curl \
+              -s \
+              -o /dev/null \
+              -w "%{http_code}" \
+              --connect-timeout 1 \
+              --max-time 2 \
+              "${LANGFUSE_URL}" || true)
+
+            echo "Attempt ${ATTEMPT} - HTTP ${HTTP_CODE}"
+
+            if [ "${HTTP_CODE}" = "200" ]; then
+              echo "Langfuse is ready."
+              echo "ready=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          echo "Langfuse unavailable after 180 seconds."
+          echo "ready=false" >> "${GITHUB_OUTPUT}"
+
+          # Langfuse가 준비되지 않으면 모델을 실행하지 않는다.
+          # Langfuse 데이터 없는 성공 실행을 막는다.
+          exit 1
+
+
+      # ==================================================
       # 7. Weekly Three-Model Review
       # ==================================================
       - name: Run weekly three-model review
+        id: review
         shell: bash
 
         env:
@@ -230,6 +249,18 @@ jobs:
           LANGFUSE_BASE_URL: ${{ steps.langfuse.outputs.ready == 'true' && secrets.LANGFUSE_BASE_URL || '' }}
 
         run: |
+          set -e
+
+          # Langfuse는 이번 실행에서 필수다.
+          # 값 자체는 출력하지 않는다.
+          if [ -z "${LANGFUSE_PUBLIC_KEY}" ] || \
+             [ -z "${LANGFUSE_SECRET_KEY}" ] || \
+             [ -z "${LANGFUSE_BASE_URL}" ]; then
+
+            echo "Required Langfuse configuration is missing."
+            exit 1
+          fi
+
           ARGS=()
 
           LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
@@ -246,24 +277,14 @@ jobs:
           printf ' %q' "${ARGS[@]}"
           echo
 
+          # 이 Python 실행이 끝나기 전에
+          # langfuse_observer.py의 flush_langfuse()가
+          # 실제 Langfuse 저장 여부까지 확인한다.
           python -m scripts.weekly_cross_review "${ARGS[@]}"
 
 
       # ==================================================
-      # 8. Give Langfuse time to finish exporting traces
-      # ==================================================
-      - name: Finish Langfuse trace export
-        if: ${{ always() && steps.langfuse.outputs.ready == 'true' }}
-        shell: bash
-
-        run: |
-          echo "Waiting for Langfuse trace export to finish..."
-          sleep 30
-          echo "Langfuse export grace period completed."
-
-
-      # ==================================================
-      # 9. Safe result summary
+      # 8. Safe result summary
       # ==================================================
       - name: Show safe result summary
         if: always()
@@ -303,18 +324,27 @@ jobs:
 
 
       # ==================================================
-      # 10. Stop Langfuse VM
+      # 9. Stop Langfuse VM
       # ==================================================
       - name: Stop Langfuse VM
-        if: always()
+
+        # review 성공 =
+        # Python에서 Langfuse flush + 실제 observation 조회 확인까지 성공
+        #
+        # Langfuse 저장 확인이 실패하면 VM을 끄지 않는다.
+        if: ${{ always() && steps.review.outcome == 'success' }}
+
         shell: bash
 
         run: |
           echo "Stopping Langfuse VM..."
 
+          # 데이터 저장 확인은 이미 끝났다.
+          # VM 종료 완료까지 GitHub Actions가 기다리지 않는다.
           gcloud compute instances stop "${GCP_VM_NAME}" \
             --project="${GCP_PROJECT_ID}" \
             --zone="${GCP_ZONE}" \
+            --async \
             || true
 
-          echo "Langfuse VM stop step completed."
+          echo "Langfuse VM stop request submitted."
