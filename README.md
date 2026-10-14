@@ -1,485 +1,346 @@
+# GitHub Weekly Three-Model Project Reviewer
 
+GitHub 저장소의 최근 변경사항을 **Qwen · Command A · Gemini**가 독립적으로 분석하고, 실제 코드 근거 검증과 모델 간 교차평가를 거쳐 한국어 주간 리뷰를 GitHub Issue로 기록하는 자동화 프로젝트입니다.
 
+GitHub Actions로 매주 한 번 실행하며, **변경사항이 없는 주에는 모델 호출을 생략하고 변경 없음 기록을 남깁니다.**
 
-GitHub Weekly Three-Model Project Reviewer
-GitHub 저장소의 주간 상태를
-Qwen + Command A + Gemini 세 AI 모델이 각각 독립적으로 검토한 뒤, 서로의 결과를 교차검증하여 GitHub Issue로 남기는 자동화 프로젝트입니다.
+AI가 코드를 수정하거나 커밋·배포하지 않습니다. 검토 결과와 실행 근거를 사람이 확인할 수 있도록 정리하는 것이 목적입니다.
 
-단일 AI의 판단을 그대로 사용하는 것이 아니라,
-여러 모델이 서로 다른 관점에서 분석하고 다시 상호 검증하여 잘못된 지적이나 근거가 부족한 리뷰를 줄이는 것을 목표로 합니다.
+---
 
-AI가 코드를 직접 수정하지 않습니다.
-주간 리뷰는 토큰 제한을 고려해 최신 main.py와 README.md를 핵심 검토 대상으로 사용합니다.
+## 📌 현재 구현 및 운영 상태
 
-핵심 구조
-주간 핵심 입력
+| 항목 | 현재 상태 |
+|---|---|
+| 주간 예약 실행 | GitHub Actions에 구성 |
+| 주간 Issue 생성 | 대상 저장소에서 실제 생성 기록 확인 |
+| 세 모델 독립 분석 | 구현 및 실제 실행 기록 확인 |
+| 실제 변경 라인·코드 근거 검증 | 구현 |
+| 모델 간 교차평가·합의 | 구현 |
+| 변경 없음 처리 | 모델 호출 없이 주간 기록 생성 |
+| 같은 날짜의 Issue 중복 방지 | 기존 Issue 확인 후 실행 생략 |
+| JSON·SQLite 실행 기록 | 구현 |
+| Langfuse 모델 호출 관측·저장 확인 | 주간 워크플로에 연결 |
+| GCP Langfuse VM 시작·종료 | 주간 워크플로에 연결 |
+| 특정 PR 교차검증 | 수동 실행 워크플로 구성 |
+| 기존 단일 Qwen 리뷰 | 수동 실행용 Legacy 경로로 유지 |
 
-최신 main.py
-+ 최신 README.md
-+ 최근 변경 메타데이터
-main.py는 현재 프로젝트의 실행 구조와 핵심 연결 상태를,
-README.md는 프로젝트 목적·기능·사용법·현재 설명 상태를 확인하기 위한 핵심 산출물로 사용합니다.
+### 운영 기록 — 2026-10-14 확인 기준
 
-1차 분석
+확인한 최근 주간 리뷰의 대상은 `leeony2636/docker-fastapi-sentiment-api`입니다.
 
-main.py + README.md
-        ↓
-Qwen 독립 분석
-Command A 독립 분석
-Gemini 독립 분석
-2차 교차검증
+| 날짜 | 확인된 결과 | 근거 |
+|---|---|---|
+| 2026-09-17 | 세 모델 실행 성공 기록. 원본 지적 6건 중 변경 라인·코드 근거 검증으로 제외된 항목이 있으며 최종 합의는 0건 | [Issue #25](https://github.com/leeony2636/docker-fastapi-sentiment-api/issues/25) |
+| 2026-09-21 | 예약 실행 성공. 변경 없음으로 모델 호출 생략 | [Issue #26](https://github.com/leeony2636/docker-fastapi-sentiment-api/issues/26) |
+| 2026-09-28 | 예약 실행 성공. 변경 없음으로 모델 호출 생략 | [Issue #27](https://github.com/leeony2636/docker-fastapi-sentiment-api/issues/27) |
+| 2026-10-05 | 예약 실행 성공. 변경 없음으로 모델 호출 생략 | [Issue #28](https://github.com/leeony2636/docker-fastapi-sentiment-api/issues/28) |
+| 2026-10-12 | 단위 테스트·Langfuse 준비 확인 이후 주간 리뷰 단계에서 `GitHubServiceError`로 실패 | [Actions 실행 기록](https://github.com/leeony2636/github-weekly-project-reviewer/actions/runs/38210357439) |
 
-세 모델의 1차 의견
-        ↓
-Review Candidate 생성
-        ↓
-Qwen / Command A / Gemini 교차평가
-        ↓
-실제 변경 라인 및 코드 근거 검증
-        ↓
-최소 2개 모델이 동의한 항목만 최종 채택
-최종 결과
+10월 12일 기록에서는 **125개 테스트와 2개 subtest 통과**가 확인됩니다. 이는 해당 실행의 기록이며, 새로운 환경에서 다시 실행한 검증 결과를 뜻하지 않습니다.
 
-모델별 1차 의견
-→ 모델 간 교차검증
-→ 최종 교차검증 결과
-→ 최종 종합 의견
-→ GitHub Issue 등록
-→ JSON / SQLite 실행 기록 저장
-사용 AI 모델
-역할	Provider	Model
-코드 분석 / 교차검증	Hugging Face	Qwen/Qwen2.5-Coder-3B-Instruct
-코드 분석 / 교차검증	Cohere	command-a-plus-05-2026
-코드 분석 / 교차검증	Google Gemini	gemini-3.8-flash
-세 모델은 모두 단순 보조 모델이 아니라
-1차 분석과 2차 교차검증에 참여합니다.
+최신 실패의 상세 원인은 아직 확정하지 않았습니다. 토큰 만료나 모델 오류로 단정하지 않습니다. 해당 실행에서는 VM 종료 단계가 생략되었으며, 이후 실제 VM 상태는 별도로 확인해야 합니다.
 
-동작 원리
-1. GitHub 변경사항 + 핵심 파일 수집
-최근 7일 동안의 데이터를 수집합니다.
+---
 
-Commit
+## 🎯 프로젝트 목적
 
-Pull Request
+단일 모델의 지적을 바로 채택하지 않고 다음 과정을 거쳐 검토 결과의 근거를 확인합니다.
 
-변경 파일
+1. 최근 변경사항과 프로젝트 핵심 파일을 수집합니다.
+2. 세 모델이 각각 독립적으로 분석합니다.
+3. 지적한 파일·라인·코드 근거가 실제 변경사항과 맞는지 검사합니다.
+4. 검증을 통과한 후보를 세 모델이 다시 교차평가합니다.
+5. 서로 다른 모델 중 최소 2개가 수용한 항목을 최종 결과로 채택합니다.
+6. 모델별 의견과 제외 사유, 최종 합의를 Issue와 실행 기록으로 남깁니다.
 
-실제 diff
+모델 간 합의는 검토 기준이며, 실제 버그나 수정 필요성을 최종 확정하는 판단은 사람이 수행합니다.
 
-변경된 코드 라인
+---
 
-그리고 기본 브랜치의 최신 핵심 파일을 별도로 가져옵니다.
+## 🔄 전체 실행 흐름
 
-main.py
-README.md
-주간 리뷰는 기본적으로 최근 7일의 변경사항을 참고하되,
-세 모델의 1차 검토 입력은 최신 main.py와 README.md를 중심으로 구성합니다.
+```text
+GitHub Actions 예약 또는 수동 실행
+    ↓
+GCP 인증 및 Langfuse VM 시작 요청
+    ↓
+Python 의존성 설치·단위 테스트
+    ↓
+Langfuse 준비 상태 확인
+    ↓
+대상 저장소의 최근 변경사항 수집
+    ├─ 같은 날짜 Issue 존재 → 중복 실행 생략
+    ├─ 변경 없음 → 모델 호출 없이 주간 기록 생성
+    └─ 변경 있음
+          ↓
+       핵심 파일 기반 세 모델 독립 분석
+          ↓
+       실제 변경 라인·코드 근거 검증
+          ↓
+       후보 생성 및 세 모델 교차평가
+          ↓
+       최소 2개 모델 합의
+    ↓
+대상 저장소에 Issue 생성
+    ↓
+JSON·SQLite 실행 기록
+    ↓
+Langfuse 전송 및 observation 저장 확인
+    ↓
+리뷰 단계 성공 시 VM 종료 요청
+```
 
-2. 모델별 독립 분석
-Qwen, Command A, Gemini가 최신 핵심 파일을 각각 독립적으로 검토합니다.
+VM 시작은 비동기로 요청하여 Python 설치·테스트와 부팅 시간을 겹칩니다. 모델 실행 전에는 Langfuse가 준비되었는지 확인합니다.
 
-주간 리뷰에서는 저장소 전체의 세부 버그를 모두 찾기보다 다음을 우선합니다.
+---
 
-프로젝트 목적과 현재 구조의 큰 불일치
+## 🤖 사용 모델
 
-README와 구현 방향의 불일치
+현재 워크플로에 선언된 모델 설정입니다.
 
-주요 구조적 위험
+| 내부 식별자 | Provider | 모델 ID |
+|---|---|---|
+| `qwen` | Hugging Face | `Qwen/Qwen2.5-Coder-3B-Instruct` |
+| `gpt` | Cohere | `command-a-plus-05-2026` |
+| `gemini` | Google Gemini | `gemini-3.8-flash` |
 
-다음 개선 우선순위
+`gpt`라는 내부 이름과 `gpt_client.py`, `GPT_MODEL`은 기존 코드의 명칭입니다. **현재 해당 경로는 Cohere Command A를 사용합니다.**
 
-각 모델의 1차 의견은 ReviewRun.raw_findings에 보존되어
-최종 GitHub Issue에서 모델별로 확인할 수 있습니다.
+모델 ID는 실행 설정이며, Provider의 이용 가능 여부·사용 한도·실제 응답 성공을 보장하지 않습니다.
 
-3. 실제 코드 근거 검증
-AI가 생성한 결과를 바로 사용하지 않습니다.
+---
 
-다음 항목을 실제 Git diff와 비교합니다.
+## 🔍 검토 범위와 채택 기준
 
-AI가 지적한 파일이 실제 변경 파일인지
+### 주간 검토 입력
 
-AI가 지적한 라인이 실제 변경 라인인지
+- 최근 7일의 Commit·Pull Request·변경 파일
+- 실제 Git diff와 변경 라인
+- 대상 저장소 기본 브랜치의 `main.py`
+- 대상 저장소 기본 브랜치의 `README.md`
 
-AI가 제시한 코드 근거가 실제 코드와 일치하는지
+주간 1차 분석은 프로젝트 목적·핵심 구조·주요 위험·다음 개선 우선순위를 짧게 검토합니다.
 
-실제 변경사항과 맞지 않는 결과는 제외됩니다.
+현재 입력 구성은 다음과 같습니다.
 
-4. Review Candidate 생성
-세 모델이 만든 Finding을 다음 기준으로 묶습니다.
+- README는 앞부분 최대 800자를 사용합니다.
+- 주간 핵심 프롬프트는 최대 2,200자로 제한합니다.
+- 필요하면 `main.py`도 앞부분 위주로 제한합니다.
+- 핵심 파일이 없으면 해당 파일을 건너뜁니다.
+- 변경 파일이 없으면 세 모델을 호출하지 않습니다.
 
-같은 파일
+따라서 저장소 전체의 모든 모듈을 정밀 검사하는 방식은 아닙니다.
 
-비슷한 변경 라인
+### 근거 검증
 
-같은 문제 분류
+모델이 제시한 지적은 다음 조건을 확인합니다.
 
-유사한 리뷰 내용
+- 파일과 라인이 실제 변경 범위에 포함되는가
+- 제시한 코드 근거가 실제 변경 코드와 일치하는가
+- 응답이 정해진 Schema를 지키는가
+- 모델 식별자가 실제 호출한 Provider와 일치하는가
 
-같은 모델이 생성한 결과끼리는 합의로 인정하지 않습니다.
+검증에 실패한 지적은 최종 합의 후보에서 제외합니다.
 
-5. 세 모델 교차검증
-1차 분석이 끝나면 각 모델이 다른 모델의 분석 결과까지 다시 검토합니다.
+### 합의 기준
 
-각 후보에 대해 세 모델이 교차평가를 수행하며,
-교차검증 결과는 ReviewRun.cross_review_votes에 보존되어 GitHub Issue에 표시됩니다.
+- 1차 분석에는 세 모델 모두 성공적으로 참여해야 합니다.
+- 교차평가도 세 모델의 참여를 확인합니다.
+- 서로 다른 모델 중 최소 2개가 수용한 후보를 채택합니다.
+- 같은 모델의 여러 지적을 여러 모델의 합의로 계산하지 않습니다.
+- 변경 라인 비교의 기본 허용 범위는 ±1입니다.
 
-즉 구조는 다음과 같습니다.
+---
 
-Qwen ─────┐
-Command A ├─ 1차 분석
-Gemini ───┘
-     ↓
-Review Candidates
-     ↓
-Qwen ─────┐
-Command A ├─ 교차평가
-Gemini ───┘
-     ↓
-Consensus
-합의 규칙
-기본 설정:
+## ⏰ 예약 실행과 Issue 생성
 
-MIN_SUCCESSFUL_PROVIDERS = 3
-MIN_MATCH_COUNT = 2
-LINE_TOLERANCE = 1
-의미는 다음과 같습니다.
+주간 워크플로는 **매주 월요일 오전 9시 20분(KST)**으로 예약되어 있습니다.
 
-세 모델이 정상적으로 분석에 참여
-
-서로 다른 모델 중 최소 2개가 같은 문제에 동의
-
-변경 라인은 ±1 범위까지 동일 위치로 판단 가능
-
-최소 조건을 만족한 항목만 최종 리뷰 결과에 포함됩니다.
-
-주간 리뷰 자동화
-GitHub Actions의 Weekly Three-Model Review가 실행됩니다.
-
-기본 흐름:
-
-GitHub Actions
-→ Unit Test
-→ 최근 7일 변경사항 수집
-→ 최신 main.py / README.md 수집
-→ 세 모델 독립 분석
-→ 코드 근거 검증
-→ 세 모델 교차평가
-→ Consensus 생성
-→ 모델별 의견 / 교차검증 / 종합 결과 구성
-→ 결과 JSON 저장
-→ GitHub Issue 생성
-자동 실행 시간
-주간 리뷰는 매주 월요일 오전 9시(KST) 자동 실행됩니다.
-
-GitHub Actions는 UTC 기준이므로 다음 Cron을 사용합니다.
-
+```yaml
 schedule:
-  - cron: "0 0 * * 1"
-생성되는 Issue
-자동 실행 시 분석 결과는 TARGET_REPO 저장소의 Issue로 생성됩니다.
+  - cron: "20 0 * * 1"
+```
 
-제목:
+이는 예약 기준 시각입니다. 실제 시작 시각은 GitHub Actions 실행 기록에서 확인합니다.
 
+예약 실행에는 `--publish`가 자동으로 적용되며, 결과는 `TARGET_REPO`의 Issue로 생성됩니다.
+
+Issue 제목:
+
+```text
 주간 프로젝트 리뷰 - YYYY-MM-DD
-Issue에는 다음 정보가 포함됩니다.
+```
 
-분석 대상 저장소
+### Issue에 기록하는 내용
 
-분석 기간
+- 대상 저장소와 검토 기간
+- Commit·Pull Request·변경 파일 수
+- 기준 Commit과 최종 Commit
+- 모델별 1차 의견
+- 교차평가 의견과 최종 합의
+- 모델별 검토 파일 및 실행 상태
+- 변경 라인·코드 근거 불일치로 제외된 지적 수
+- 해당 기간 Commit·Pull Request 목록
 
-Commit 수
+이미 생성된 의견을 Issue에 출력할 때 추가 모델 호출을 하지 않습니다.
 
-Pull Request 수
+### 결과 해석
 
-변경 파일 수
+| 결과 | 의미 |
+|---|---|
+| 변경 없음·모델 호출 없음 | 해당 기간에 검토할 변경 파일이 없다는 기록 |
+| 세 모델 실행 성공·합의 0건 | 현재 검토 범위와 채택 기준을 통과한 지적이 없음 |
+| 일부 단계 실패 | 정상 검토 완료와 구분하여 실행 상태 확인 필요 |
+| Issue 생성 완료 | 보고서 게시 완료. 전체 코드 품질 보증과는 별개 |
 
-기준 Commit / 최종 Commit
+---
 
-모델별 1차 의견
+## 📡 Langfuse와 GCP 운영
 
-모델 간 교차검증
+현재 주간 워크플로에서는 Langfuse가 필수입니다.
 
-최종 교차검증 결과
+1. Google Cloud에 Workload Identity Federation으로 인증합니다.
+2. Langfuse VM이 실행 중인지 확인하고 필요하면 시작합니다.
+3. Langfuse HTTP 준비 상태를 최대 180초 동안 확인합니다.
+4. 모델 호출을 generation으로 관측합니다.
+5. 실행 종료 시 `flush()`로 기록을 전송합니다.
+6. 이번 실행의 observation이 Langfuse API에서 조회되는지 최대 45초 동안 확인합니다.
+7. 리뷰 단계가 성공한 경우 VM 종료를 비동기로 요청합니다.
 
-최종 종합 의견
+저장 확인 실패를 성공으로 숨기지 않습니다. 확인할 observation이 없는 실행은 별도로 처리합니다.
 
-모델별 검토 파일
+로컬 Python 실행에서는 Langfuse 설정이 없으면 관측을 생략할 수 있지만, 현재 주간 Actions 워크플로는 Langfuse 설정과 준비 상태를 요구합니다.
 
-모델 실행 성공 / 실패 상태
+---
 
-제외된 Finding 수
+## ⚙️ GitHub Actions 설정
 
-최종 Consensus 수
+현재 환경을 유지할 때는 기존 설정을 사용합니다. 별도 환경에 설치할 경우 아래 연결이 필요합니다.
 
-해당 주의 Commit 목록
+### Repository Secrets
 
-해당 주의 Pull Request 목록
+경로: `Settings → Secrets and variables → Actions → Secrets`
 
-모델별 1차 의견과 교차검증 결과를 Issue에 표시하는 기능은
-이미 생성된 결과를 다시 출력하는 방식이므로 추가 AI 호출을 발생시키지 않습니다.
+| 이름 | 용도 |
+|---|---|
+| `HF_TOKEN` | Qwen 호출 |
+| `COHERE_API_KEY` | Command A 호출 |
+| `GEMINI_API_KEY` | Gemini 호출 |
+| `TARGET_GITHUB_TOKEN` | 대상 저장소 조회 및 Issue 생성 |
+| `GCP_WIF_PROVIDER` | Google Cloud 인증 |
+| `GCP_SERVICE_ACCOUNT` | VM 시작·종료에 사용하는 서비스 계정 |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse 연결 |
+| `LANGFUSE_SECRET_KEY` | Langfuse 인증 |
+| `LANGFUSE_BASE_URL` | Langfuse 서버 주소 |
 
-최종 리뷰 예시
-각 리뷰 항목에는 다음과 같은 정보가 표시됩니다.
+대상 저장소의 조회·Issue 생성 권한과 GCP VM 시작·종료 권한을 각각 확인해야 합니다.
 
-[P1] 입력값 검증이 누락되어 있습니다.
+GCP 프로젝트·존·VM 이름은 현재 `weekly-cross-review.yml`에 선언되어 있습니다. 다른 환경에 설치할 때는 해당 환경의 값으로 설정합니다.
 
-위치: src/example.py:42
-분류: validation
-합의 모델: qwen, gemini
-신뢰도: 0.91
+### Repository Variables
 
-판단 이유:
-사용자 입력이 검증 없이 함수 내부로 전달됩니다.
+경로: `Settings → Secrets and variables → Actions → Variables`
 
-실제 변경 근거:
-<실제 diff 코드>
-두 모델 이상이 같은 문제를 확인하지 못한 경우에는
-해당 내용은 최종 결과에서 제외됩니다.
+| 이름 | 설명 |
+|---|---|
+| `TARGET_REPO` | 검토할 저장소. 형식: `owner/repository` |
 
-"지적 없음"의 의미
-세 모델이 모두 정상 실행되었는데 1차 의견과 Consensus가 모두 0건이라면,
-이번 주간 리뷰 범위에서 프로젝트 목적·핵심 구조·README 방향에 대해 큰 문제를 발견하지 못했다는 의미입니다.
+값이 없으면 워크플로가 실행되는 현재 저장소를 대상으로 사용합니다.
 
-다만 이것이 프로젝트 전체가 완벽하다는 뜻은 아닙니다.
+API 키·토큰·개인 인증값은 README나 소스 코드에 작성하지 않습니다.
 
-주간 리뷰는 의도적으로 main.py와 README.md 중심의 넓은 점검을 수행하므로,
-개별 모듈 내부의 세부 예외 처리나 미세한 코드 버그까지 모두 검사하는 정밀 리뷰와는 역할이 다릅니다.
+---
 
-주간 리뷰 = 짧고 넓은 프로젝트 상태 점검
-세부 코드 리뷰 = 필요할 때 별도로 수행
-PR Cross Review
-주간 리뷰 외에 특정 Pull Request만 대상으로
-세 모델 교차검증을 실행하는 기능도 포함되어 있습니다.
+## ▶️ 수동 실행
 
-GitHub Actions:
+### 주간 리뷰
 
-PR Cross Review
-실행할 때 분석할 PR 번호를 입력합니다.
+`Actions → Weekly Three-Model Review → Run workflow`
 
-PR_NUMBER
-흐름:
+| 입력 | 동작 |
+|---|---|
+| `lookback_days` | 최근 검토 기간. 기본 7일 |
+| `publish_issue` | 수동 실행 결과를 Issue로 게시할지 선택 |
+| `upload_artifacts` | 입력은 정의되어 있으나 현재 주간 워크플로에 실제 업로드 단계는 연결되어 있지 않음 |
 
-특정 Pull Request
-→ Diff 수집
-→ 세 모델 독립 분석
-→ 실제 변경 라인 검증
-→ 교차평가
-→ Consensus 생성
-→ JSON / SQLite 기록
-Legacy Qwen Review
-기존 단일 Qwen 리뷰 방식도 호환 및 비교를 위해 남겨두었습니다.
+수동 실행의 `publish_issue` 기본값은 `false`입니다. 예약 실행은 Issue 게시를 활성화합니다.
 
-GitHub Actions:
+### PR 교차검증
 
-Legacy Qwen Weekly Review
-이 워크플로우는 현재 메인 구조가 아니며,
-현재 주 기능은 세 모델 교차검증 방식입니다.
+`Actions → PR Cross Review → Run workflow`
 
-GitHub Actions Secrets
-Repository에서 다음 경로로 이동합니다.
+- `pr_number`: 검토할 PR 번호
+- `upload_artifacts`: 결과 JSON과 SQLite 기록 업로드 여부
 
-Settings
-→ Secrets and variables
-→ Actions
-→ Repository secrets
-다음 Secret을 등록합니다.
+PR 워크플로에는 실제 Artifact 업로드 단계가 있으며 보존 기간은 7일입니다. 주간 리뷰와 달리 현재 PR 워크플로에는 GCP VM 시작·종료 절차가 없습니다.
 
-Secret	용도
-HF_TOKEN	Qwen 호출
-COHERE_API_KEY	Command A 호출
-GEMINI_API_KEY	Gemini 호출
-TARGET_GITHUB_TOKEN	대상 Repository 조회 및 Issue 생성
-API Key와 Token은 코드에 직접 작성하지 않습니다.
+### Legacy Qwen 리뷰
 
-분석 대상 저장소 설정
-다음 경로로 이동합니다.
+`Actions → Legacy Qwen Weekly Review → Run workflow`
 
-Settings
-→ Secrets and variables
-→ Actions
-→ Variables
-다음 Repository Variable을 등록합니다.
+기존 단일 Qwen 방식의 수동 실행 경로입니다. 현재 주간 예약 실행의 주 경로는 세 모델 교차검증입니다.
 
-이름	예시	설명
-TARGET_REPO	leeony2636/my-project	분석할 Repository
-등록하지 않으면 현재 Repository가 기본 대상이 됩니다.
+---
 
-수동 실행
-GitHub Repository에서:
+## 🛡️ 호출 제한·보안·실행 기록
 
-Actions
-→ Weekly Three-Model Review
-→ Run workflow
-수동 실행 시 다음 값을 설정할 수 있습니다.
+- 입력 문자 수와 Provider별 호출 횟수 제한
+- Provider timeout과 응답 Schema 검사
+- 실제 변경 라인·코드 근거 검증
+- 민감정보 의심 내용의 외부 모델 전송·Issue 생성 차단
+- 동일 날짜 Issue 중복 방지
+- 기존 SQLite 기록을 사용할 수 있는 환경의 결과 캐시
 
-Lookback Days
-분석할 최근 일수입니다.
+현재 예약 워크플로는 일반 출력 상한을 4,096 tokens, Command A 출력 상한을 8,192 tokens로 설정합니다. PR 워크플로와 `.env.example`의 기본 출력 상한은 800 tokens이므로 실행 경로별 설정을 구분합니다.
 
-기본값:
+Provider별 호출 제한도 실행 경로에 따라 다릅니다. Python 기본값은 각 6회이고, `.env.example` 및 PR 워크플로에는 Qwen 5회·Command A 5회·Gemini 6회가 선언되어 있습니다.
 
-7
-Publish Issue
-활성화하면 실제 GitHub Issue를 생성합니다.
+모델 API와 GCP VM 비용은 실제 사용량과 서비스 요금 정책에 따릅니다.
 
-Upload Artifacts
-활성화하면 JSON 결과와 SQLite 실행 기록을 Artifact로 저장합니다.
+### 생성되는 파일
 
-결과 파일
-주간 리뷰 결과:
+| 파일 | 내용 |
+|---|---|
+| `weekly_review_result.json` | 주간 리뷰 결과와 Issue 본문 |
+| `review_result.json` | PR 리뷰 결과 |
+| `review_trace.db` | SQLite 실행·Provider 호출·검증 기록 |
 
-weekly_review_result.json
-주간 실행 기록:
+파일 경로는 환경변수로 변경할 수 있습니다.
 
-weekly_review_trace.db
-PR 리뷰 결과:
+현재 주간 Actions에는 결과 파일의 Artifact 업로드·이전 SQLite 기록 복원 단계가 없습니다. 따라서 로컬 파일 생성과 실행 간 보존을 구분합니다. PR 워크플로는 사용자가 선택하면 Artifact를 업로드합니다.
 
-review_result.json
-PR 실행 기록:
+---
 
-review_trace.db
-실행 기록
-SQLite에는 리뷰 실행과 AI 호출 관련 기록이 저장됩니다.
+## 📁 현재 폴더 구조
 
-주요 기록:
-
-실행 상태
-
-분석 대상
-
-모델 호출 결과
-
-Provider 성공 / 실패
-
-검증된 Finding
-
-제외된 Finding
-
-교차검증 결과
-
-Consensus 결과
-
-필요한 경우 GitHub Actions Artifact로 내려받아 확인할 수 있습니다.
-
-안정성 검증
-리뷰 결과를 생성하기 전에 여러 검증을 수행합니다.
-
-실제 변경 파일 검증
-
-실제 변경 라인 검증
-
-Evidence 코드 일치 확인
-
-잘못된 JSON 응답 차단
-
-Provider 응답 형식 검사
-
-Provider Identity 검사
-
-동일 모델끼리의 합의 방지
-
-유사 Finding 그룹화
-
-최소 합의 모델 수 검사
-
-API 호출 실패 처리
-
-Timeout 처리
-
-Quota Guard
-
-민감정보 포함 여부 검사
-
-Quota / API 보호
-모델별 API 호출량과 입력 크기를 제한합니다.
-
-기본 호출 제한:
-
-MAX_QWEN_CALLS_PER_RUN=5
-MAX_GPT_CALLS_PER_RUN=5
-MAX_GEMINI_CALLS_PER_RUN=6
-
-QWEN_INPUT_CHAR_LIMIT=4800
-CLOUD_INPUT_CHAR_LIMIT=4800
-입력 제한 예시:
-
-QWEN_INPUT_CHAR_LIMIT=4800
-CLOUD_INPUT_CHAR_LIMIT=4800
-주간 핵심 리뷰 프롬프트는 전체 입력 한도를 한 번에 사용하지 않고
-약 2,200자 이내로 제한하여 이후 교차검증에 사용할 여유를 남깁니다.
-
-README는 주간 입력에서 앞부분을 우선 사용해 불필요한 토큰 소비를 줄입니다.
-
-짧은 핵심 입력
-→ 3개 모델 1차 분석
-→ 남은 예산으로 교차검증
-→ 기존 결과를 Issue에 출력
-무료 또는 제한된 API 환경에서 과도한 호출과 토큰 사용을 방지하기 위한 구조입니다.
-
-테스트
-GitHub Actions에서 실제 AI 분석 전에 Unit Test를 먼저 실행합니다.
-
-$env:PYTHONPATH="src"
-python -m pytest -v
-테스트 대상에는 다음 기능이 포함됩니다.
-
-환경 설정
-
-Consensus
-
-Diff Parser
-
-GitHub Service
-
-Orchestrator
-
-Prompt
-
-AI Provider
-
-Quota Guard
-
-Review Selector
-
-Schema
-
-Security
-
-Trace Store
-
-Weekly Service
-
-테스트가 실패하면 본 리뷰 단계로 진행되지 않습니다.
-
-프로젝트 구조
+```text
 github-weekly-project-reviewer/
 ├── .github/
 │   └── workflows/
-│       ├── weekly-cross-review.yml
-│       ├── pr-cross-review.yml
-│       └── weekly-review.yml
-│
+│       ├── weekly-cross-review.yml   # 주간 예약·수동 리뷰
+│       ├── pr-cross-review.yml       # 수동 PR 교차검증
+│       └── weekly-review.yml         # Legacy Qwen 수동 리뷰
 ├── scripts/
-│   ├── weekly_cross_review.py
-│   ├── pr_review.py
-│   └── weekly_review.py
-│
+│   ├── weekly_cross_review.py        # 주간 리뷰·Issue 생성
+│   ├── pr_review.py                  # PR 리뷰 실행
+│   └── weekly_review.py              # Legacy 실행기
 ├── src/
 │   └── reviewer/
 │       ├── providers/
 │       │   ├── qwen_client.py
-│       │   ├── gpt_client.py
+│       │   ├── gpt_client.py         # 현재 Cohere Command A
 │       │   └── gemini_client.py
-│       │
 │       ├── prompts/
 │       │   ├── qwen_prompt.py
 │       │   ├── gpt_prompt.py
 │       │   ├── gemini_prompt.py
 │       │   └── cross_review_prompt.py
-│       │
 │       ├── config.py
 │       ├── consensus.py
 │       ├── diff_parser.py
 │       ├── github_service.py
+│       ├── langfuse_observer.py
 │       ├── orchestrator.py
 │       ├── quota_guard.py
 │       ├── review_selector.py
@@ -487,98 +348,52 @@ github-weekly-project-reviewer/
 │       ├── security.py
 │       ├── trace_store.py
 │       └── weekly_service.py
-│
 ├── tests/
-│   ├── test_config.py
-│   ├── test_consensus.py
-│   ├── test_diff_parser.py
-│   ├── test_github_service.py
-│   ├── test_orchestrator.py
-│   ├── test_prompts.py
-│   ├── test_providers.py
-│   ├── test_quota_guard.py
-│   ├── test_review_selector.py
-│   ├── test_schemas.py
-│   ├── test_security.py
-│   ├── test_trace_store.py
-│   ├── test_weekly_cross_review.py
-│   └── test_weekly_service.py
-│
+│   ├── fixtures/
+│   └── test_*.py
 ├── .env.example
+├── .gitignore
+├── .dockerignore
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
 ├── requirements-legacy.txt
 └── README.md
-환경 변수 예시
-.env.example 기준 주요 설정:
+```
 
-TARGET_REPO=
+`langfuse_observer.py`는 모델 호출 관측·전송·저장 확인을 담당합니다. `scripts/`는 실행 진입점이고 `src/reviewer/`는 검토·검증·기록 로직을 담당합니다.
 
-HF_TOKEN=
-COHERE_API_KEY=
-GEMINI_API_KEY=
-TARGET_GITHUB_TOKEN=
+---
 
-QWEN_MODEL=Qwen/Qwen2.5-Coder-3B-Instruct
-QWEN_BASE_URL=https://router.huggingface.co/featherless-ai/v1
+## 🧪 로컬 테스트
 
-GPT_MODEL=command-a-plus-05-2026
-GPT_BASE_URL=https://api.cohere.ai/compatibility/v1
+프로젝트 루트의 PowerShell에서 실행합니다.
 
-GEMINI_MODEL=gemini-3.8-flash
-GEMINI_THINKING_LEVEL=low
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:PYTHONPATH = 'src'
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-MIN_MATCH_COUNT=2
-MIN_SUCCESSFUL_PROVIDERS=3
-LINE_TOLERANCE=1
+환경 설정, Diff 처리, Provider 응답, 합의, 입력 선택, 보안, 호출 제한, 실행 기록과 주간 처리 등을 검사합니다.
 
-MAX_QWEN_CALLS_PER_RUN=5
-MAX_GPT_CALLS_PER_RUN=5
-MAX_GEMINI_CALLS_PER_RUN=6
-기술 스택
-Python 3.11
+테스트 통과와 실제 Provider 호출·Issue 게시·Langfuse 저장 성공은 구분합니다.
 
-GitHub Actions
+Docker 실행 구성도 포함되어 있으며 기본 실행 대상은 `scripts/pr_review.py`입니다. GCP와 Langfuse를 사용하는 주간 Actions 전체 절차와 동일한 실행 환경은 아닙니다.
 
-GitHub API / PyGithub
+---
 
-Hugging Face API
+## 📚 기술 스택
 
-Cohere API
+`Python 3.11` · `GitHub Actions` · `PyGithub` · `Hugging Face` · `Cohere` · `Google Gemini` · `SQLite` · `Langfuse` · `Google Cloud Compute Engine` · `Workload Identity Federation` · `Docker` · `pytest`
 
-Google Gemini API
+---
 
-Qwen 2.5 Coder
+## 확인 범위
 
-Command A
+이 README는 2026-10-14 확인한 기본 브랜치의 폴더 구조·코드·워크플로 설정과 기존 Actions·Issue 기록을 기준으로 작성했습니다.
 
-Gemini
+문서 정리를 위해 모델 호출, 워크플로 재실행, VM 제어, 인증 설정 변경 또는 새로운 Issue 생성을 수행하지 않았습니다.
 
-SQLite
-
-Docker
-
-Unit Test
-
-Multi-Agent Cross Review
-
-Consensus Validation
-
-프로젝트 핵심
-이 프로젝트의 핵심은 단순히 AI에게 코드를 한 번 분석시키는 것이 아닙니다.
-
-최신 핵심 산출물 수집
-        ↓
-3개 모델 독립 분석
-        ↓
-실제 코드 근거 검증
-        ↓
-3개 모델 교차평가
-        ↓
-최소 2개 모델 합의
-        ↓
-모델별 의견 + 교차검증 + 최종 종합
-        ↓
-GitHub Issue 생성
-토큰을 무리하게 사용하지 않으면서도 여러 AI가 서로의 판단을 보완하고 검증하는 주간 프로젝트 리뷰 시스템입니다.
+최신 `GitHubServiceError`의 상세 원인과 이후 복구 상태는 별도 확인이 필요합니다.
